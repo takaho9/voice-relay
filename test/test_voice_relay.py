@@ -153,6 +153,15 @@ class PairingTest(unittest.TestCase):
             self.assertNotIn('secret-looking', str(e))
 
 
+class VersionTest(unittest.TestCase):
+    def test_version_tuple(self):
+        self.assertEqual(v._version_tuple('50.0.2'), (50, 0, 2))
+        self.assertEqual(v._version_tuple('3.4.8'), (3, 4, 8))
+        self.assertEqual(v._version_tuple('51.0'), (51, 0, 0))
+        self.assertEqual(v._version_tuple('50.0.3rc1'), (50, 0, 3))
+        self.assertLess(v._version_tuple('46.0.5'), v.RECOMMENDED_CRYPTOGRAPHY)
+
+
 class RevealTest(unittest.TestCase):
     def test_plain_kept(self):
         s = 'こんにちは\n\tHello \U0001F468‍\U0001F469 ❤️'

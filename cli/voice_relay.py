@@ -5,7 +5,7 @@ Node.js 20 以上が使えない環境向け。Web 版・Node 版と同じ形式
 秘密ファイル（~/.config/voice-relay/secret）も共通。
 暗号処理は cryptography パッケージ（AES-GCM, HKDF）を使い、自前実装はしない。
 
-    pip install --user cryptography
+    python3 -m pip install --user --upgrade "cryptography>=50.0.2"
     python3 cli/voice_relay.py import
     python3 cli/voice_relay.py receive
 
@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 
 try:
+    import cryptography
     from cryptography.exceptions import InvalidTag
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -40,7 +41,7 @@ try:
 except ImportError:
     sys.stderr.write(
         'エラー: cryptography パッケージが必要です。次のコマンドで入れてください:\n'
-        '  python3 -m pip install --user cryptography\n'
+        '  python3 -m pip install --user --upgrade "cryptography>=50.0.2"\n'
     )
     sys.exit(1)
 
@@ -71,6 +72,28 @@ MAX_LINE_BYTES = 64 * 1024
 B64URL_RE = re.compile(r'^[A-Za-z0-9_-]*$')
 ID_RE = re.compile(r'^[A-Za-z0-9_-]{22}$')
 NTFY_ID_RE = re.compile(r'^[A-Za-z0-9]+$')
+
+
+# 2026-10 時点で既知の脆弱性（CVE）が報告されていない最初の版
+RECOMMENDED_CRYPTOGRAPHY = (50, 0, 2)
+
+
+def _version_tuple(s):
+    parts = []
+    for p in s.split('.')[:3]:
+        m = re.match(r'\d+', p)
+        parts.append(int(m.group()) if m else 0)
+    return tuple(parts + [0] * (3 - len(parts)))
+
+
+def check_cryptography_version():
+    """古い cryptography（OS 付属のものなど）なら警告する。
+    OS のパッケージは版番号が古いまま修正だけ取り込んでいることがあるので、止めはしない。"""
+    ver = getattr(cryptography, '__version__', '0')
+    if _version_tuple(ver) < RECOMMENDED_CRYPTOGRAPHY:
+        info('警告: cryptography {} は古い版です（既知の脆弱性があります）。次のコマンドで更新してください:\n'
+             '  python3 -m pip install --user --upgrade "cryptography>={}"'.format(
+                 ver, '.'.join(str(x) for x in RECOMMENDED_CRYPTOGRAPHY)))
 
 
 def fail(msg):
@@ -610,6 +633,7 @@ def main():
     sub.add_parser('send', help='標準入力のテキストを送る（動作確認用）')
     sub.add_parser('forget', help='保存した秘密を削除する')
     args = parser.parse_args()
+    check_cryptography_version()
     commands = {'import': cmd_import, 'receive': cmd_receive, 'send': cmd_send, 'forget': cmd_forget}
     if args.command not in commands:
         parser.print_help()

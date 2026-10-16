@@ -66,14 +66,14 @@ sequenceDiagram
 | | 必要なもの | 秘密の作成 |
 |---|---|---|
 | **Node.js 版** `cli/voice-relay.mjs` | Node.js 20 以上（追加パッケージなし） | `setup`（ターミナルに QR コードを表示）または `import` |
-| **Python 版** `cli/voice_relay.py` | Python 3.8 以上 + `cryptography` パッケージ | Web のセットアップページで作って `import` |
+| **Python 版** `cli/voice_relay.py` | Python 3.9 以上 + `cryptography` 50.0.2 以上（3.8 でも動くが、脆弱性修正済みの cryptography が入らない） | Web のセットアップページで作って `import` |
 
 #### Python 版（Node.js が古い・入っていない環境向け）
 
-管理者権限は不要です。`cryptography`（AES-GCM と HKDF に使う定番の暗号ライブラリ）をユーザー領域に入れます。
+管理者権限は不要です。`cryptography`（AES-GCM と HKDF に使う定番の暗号ライブラリ）をユーザー領域に入れます。OS に古い版が入っていても `import` できてしまうので、`--upgrade` を付けて新しい版を入れてください（古い版だと起動時に警告が出ます）。
 
 ```sh
-python3 -m pip install --user cryptography
+python3 -m pip install --user --upgrade "cryptography>=50.0.2"
 git clone https://github.com/takaho9/voice-relay.git
 cd voice-relay
 

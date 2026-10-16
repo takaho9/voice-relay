@@ -19,8 +19,23 @@
   </header>
   <noscript><p class="warn">JavaScript を有効にしてください。</p></noscript>
   <p class="warn" id="setup-error" hidden></p>
+  <div class="mode-bar">
+    <div class="segmented" role="radiogroup" aria-label="送信モード">
+      <label><input type="radio" name="mode" value="auto"><span>自動送信</span></label>
+      <label><input type="radio" name="mode" value="manual"><span>手動送信</span></label>
+    </div>
+    <label class="delay" id="delay-wrap">待ち
+      <select id="delay" aria-label="自動送信までの待ち時間">
+        <option value="300">0.3 秒</option>
+        <option value="1000">1 秒</option>
+        <option value="2000">2 秒</option>
+        <option value="3000">3 秒</option>
+      </select>
+    </label>
+  </div>
+  <p class="muted hint" id="mode-hint"></p>
   <label for="text" class="muted">送るテキスト（パスワードなどの機密は送らないでください）</label>
-  <textarea id="text" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></textarea>
+  <textarea id="text" autocomplete="off" autocapitalize="off" spellcheck="false" autofocus></textarea>
   <div class="send-bar">
     <span class="muted" id="counter"></span>
     <button type="button" class="primary" id="send" disabled>送信</button>

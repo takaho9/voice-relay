@@ -6,6 +6,9 @@
 //   1 日 250 通 / リクエストは連続 60 回まで、以降 5 秒ごとに 1 回分回復 / 同時購読 30 本
 // 同じ NAT の内側にいる人（学校・会社の Wi-Fi など）はこの枠を共有する。
 
+// ntfy の 1 行は本文 4KB + メタデータ程度。余裕を見て 64K 文字で打ち切る
+const MAX_LINE_CHARS = 64 * 1024;
+
 export class NtfyError extends Error {
   /**
    * @param {'rate' | 'too-large' | 'forbidden' | 'http' | 'network'} kind
@@ -134,7 +137,7 @@ export async function subscribe(server, topic, opts) {
         while ((nl = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, nl).trim();
           buf = buf.slice(nl + 1);
-          if (!line) continue;
+          if (!line || line.length > MAX_LINE_CHARS) continue;
           let ev;
           try {
             ev = JSON.parse(line);
@@ -145,6 +148,10 @@ export async function subscribe(server, topic, opts) {
             if (typeof ev.id === 'string' && /^[A-Za-z0-9]+$/.test(ev.id)) since = ev.id;
             onMessage(ev.message);
           }
+        }
+        // 改行のないまま巨大なデータを送り続けるサーバーでメモリを使い果たさないよう、1 行の長さを制限する
+        if (buf.length > MAX_LINE_CHARS) {
+          throw new NtfyError('http', 'ntfy サーバーから想定外に大きなデータが届いたため切断しました。');
         }
       }
     } catch (e) {

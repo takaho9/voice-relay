@@ -89,7 +89,7 @@ test('deriveSession は長さの違う秘密を拒否する', async () => {
 test('暗号化 → 復号の往復（日本語・絵文字・改行・引用符）', async () => {
   const s = await deriveSession(generateSecret());
   const inbox = new Inbox();
-  const text = 'こんにちは、世界 🌏👨‍👩‍👧\n"quoted" \\ back\ttab\u0001';
+  const text = 'こんにちは、世界 🌏👨\u{200D}👩\u{200D}👧\n"quoted" \\ back\ttab\u0001';
   const now = Date.now();
   const bodies = await sealText(s, text, { now });
   assert.equal(bodies.length, 1);
@@ -180,7 +180,7 @@ test('リプレイ拒否: 記録を掃除した後に再送されても時刻で
 
 test('長文は分割され、各本文は上限以下、受信側で元通りに結合される', async () => {
   const s = await deriveSession(generateSecret());
-  for (const [unit, count] of [['あ', 5000], ['a', 5000], ['😀', 4000], ['"', 5000], ['\n', 5000], ['\u0001', 2000], ['é', 5000], [' ', 5000]]) {
+  for (const [unit, count] of [['あ', 5000], ['a', 5000], ['😀', 4000], ['"', 5000], ['\n', 5000], ['\u0001', 2000], ['é', 5000], ['\u{2028}', 5000]]) {
     const text = unit.repeat(count);
     const bodies = await sealText(s, text);
     assert.ok(bodies.length > 1, unit);
@@ -217,4 +217,9 @@ test('分割メッセージの一部が欠けたら表示しない・重複し�
   const inbox = new Inbox();
   assert.equal((await deliver(s, inbox, [bodies[0], bodies[0]], now)).length, 0);
   assert.equal((await deliver(s, inbox, bodies.slice(1), now)).length, 1);
+});
+
+test('base64url は正準形以外を拒否する（同じバイト列の別表記）', () => {
+  assert.deepEqual(decodeBase64url('AA'), new Uint8Array([0]));
+  assert.throws(() => decodeBase64url('AB'));
 });

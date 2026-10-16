@@ -6,14 +6,16 @@
 // ファイル（権限 600）に保存するか、起動時にエコーなしのプロンプトで入力する。
 
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, readFile, rm, writeFile, chmod } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, rename, rm } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { Inbox, MessageTooLongError, deriveSession, generateSecret, openBody, sealText } from '../js/crypto.js';
 import { NtfyError, publish, subscribe } from '../js/ntfy.js';
-import { DEFAULT_SERVER, buildPageUrl, normalizeServer, parsePairing, formatPairing } from '../js/pairing.js';
+import { DEFAULT_SERVER, buildPageUrl, formatPairing, normalizeServer, pairCode, parsePairing } from '../js/pairing.js';
 import { qrMatrix } from '../js/qr.js';
 import { revealHidden } from '../js/text.js';
 
@@ -55,46 +57,94 @@ function defaultSecretFile() {
 }
 
 /**
+ * @param {unknown} e
+ * @param {string} code
+ */
+function isErrno(e, code) {
+  return /** @type {NodeJS.ErrnoException} */ (e)?.code === code;
+}
+
+/**
+ * 秘密を置くディレクトリが自分のもので、他人が書き込めないことを確かめる
+ * （他人が書き込めると、ファイルをすり替えられる）。
+ * @param {string} dir
+ */
+async function checkSecretDir(dir) {
+  const st = await lstat(dir);
+  if (!st.isDirectory()) fail(`${dir} がディレクトリではありません（シンボリックリンクは使えません）。`);
+  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+    fail(`${dir} の所有者が自分ではありません。`);
+  }
+  if ((st.mode & 0o022) !== 0) {
+    fail(`${dir} が他のユーザーから書き込める権限になっています。chmod go-w ${dir} を実行してください。`);
+  }
+}
+
+/**
  * 秘密をファイルに保存する（ディレクトリ 700 / ファイル 600）。
+ * 一時ファイルを O_EXCL で新規作成して書き込み、rename で置き換える
+ * （既存のファイルやシンボリックリンクを辿って書き込まないように）。
  * @param {string} path
  * @param {import('../js/pairing.js').Pairing} pairing
  * @param {boolean} force
  */
 async function saveSecret(path, pairing, force) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  try {
-    await writeFile(path, formatPairing(pairing) + '\n', { mode: 0o600, flag: force ? 'w' : 'wx' });
-  } catch (e) {
-    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'EEXIST') {
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await checkSecretDir(dir);
+  if (!force) {
+    try {
+      await lstat(path);
       fail(`${path} は既にあります。上書きするなら --force を付けてください（古い送信ページは使えなくなります）。`);
+    } catch (e) {
+      if (!isErrno(e, 'ENOENT')) throw e;
     }
+  }
+  const tmp = join(dir, `.secret-${randomBytes(8).toString('hex')}.tmp`);
+  const fh = await open(tmp, 'wx', 0o600);
+  try {
+    await fh.writeFile(formatPairing(pairing) + '\n');
+    await fh.sync();
+  } catch (e) {
+    await fh.close();
+    await rm(tmp, { force: true });
     throw e;
   }
-  await chmod(path, 0o600); // 既存ファイルを上書きした場合や umask の影響に備える
+  await fh.close();
+  await rename(tmp, path);
 }
 
 /**
- * 保存された秘密を読む。他人が読める権限やシンボリックリンクなら拒否する。
+ * 保存された秘密を読む。シンボリックリンク・他人のファイル・他人が読める権限なら拒否する。
+ * 確認と読み込みは同じファイルハンドルで行う（途中ですり替えられないように）。
  * @param {string} path
  * @returns {Promise<import('../js/pairing.js').Pairing | null>}
  */
 async function loadSecret(path) {
-  let st;
+  let fh;
   try {
-    st = await lstat(path);
+    fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (e) {
-    if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ENOENT') return null;
+    if (isErrno(e, 'ENOENT')) return null;
+    if (isErrno(e, 'ELOOP')) fail(`${path} がシンボリックリンクです。通常のファイルにしてください。`);
     throw e;
   }
-  if (!st.isFile()) fail(`${path} が通常のファイルではありません（シンボリックリンクは使えません）。`);
-  if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
-    fail(`${path} の所有者が自分ではありません。`);
-  }
-  if ((st.mode & 0o077) !== 0) {
-    fail(`${path} が他のユーザーから読める権限になっています。chmod 600 ${path} を実行してください。`);
+  let text;
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) fail(`${path} が通常のファイルではありません。`);
+    if (typeof process.getuid === 'function' && st.uid !== process.getuid()) {
+      fail(`${path} の所有者が自分ではありません。`);
+    }
+    if ((st.mode & 0o077) !== 0) {
+      fail(`${path} が他のユーザーから読める権限になっています。chmod 600 ${path} を実行してください。`);
+    }
+    text = await fh.readFile('utf8');
+  } finally {
+    await fh.close();
   }
   try {
-    return parsePairing(await readFile(path, 'utf8'));
+    return parsePairing(text);
   } catch {
     fail(`${path} の内容が不正です。setup か import をやり直してください。`);
   }
@@ -199,11 +249,6 @@ function hhmmss(ms) {
   return new Date(ms).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-/** @param {string} topic */
-function pairCode(topic) {
-  return `${topic.slice(0, 4)}-${topic.slice(4, 8)}`;
-}
-
 /** 保存済みの秘密を読み、無ければプロンプトで入力してもらう（保存はしない） */
 async function obtainPairing(secretFile) {
   const saved = await loadSecret(secretFile);
@@ -250,13 +295,15 @@ async function cmdReceive(opts) {
   const session = await deriveSession(pairing.secret);
   const inbox = new Inbox();
   const ctrl = new AbortController();
+  const startedAt = Date.now();
   process.on('SIGINT', () => {
     ctrl.abort();
     info('\n終了しました。');
     process.exit(0);
   });
   info(`サーバー: ${new URL(pairing.server).host} / 確認コード: ${pairCode(session.topic)}`);
-  info('Ctrl-C で終了します。受信内容は表示するだけで、どこにも保存しません。');
+  info('Ctrl-C で終了します。受信内容はファイルには保存しません（ターミナルのスクロールバックには残ります）。');
+  info('直近 10 分以内に送られたメッセージも表示されます。');
 
   let queue = Promise.resolve();
   await subscribe(pairing.server, session.topic, {
@@ -273,7 +320,9 @@ async function cmdReceive(opts) {
         const shown = revealHidden(m.text);
         process.stdout.write(shown.text + '\n');
         if (shown.replaced > 0) info(`（見えない文字・制御文字が ${shown.replaced} 個含まれています）`);
-        if (opts.copy) {
+        // 起動直後には直近 10 分のメッセージも届く。再起動のたびにクリップボードを上書きしないよう、
+        // コピーするのは起動後に送られたものだけにする
+        if (opts.copy && m.t >= startedAt) {
           info((await copyToClipboard(m.text))
             ? '（クリップボードにコピーしました）'
             : '（コピーできませんでした。wl-copy / xclip / xsel が必要です）');

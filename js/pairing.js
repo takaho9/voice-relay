@@ -21,7 +21,7 @@ export function normalizeServer(input) {
   } catch {
     throw new Error('ntfy サーバーの URL が不正です');
   }
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  const local = ['localhost', '127.0.0.1'].includes(u.hostname);
   if (!(u.protocol === 'https:' || (u.protocol === 'http:' && local))) {
     throw new Error('ntfy サーバーは https:// の URL にしてください');
   }
@@ -70,6 +70,16 @@ export function parsePairing(text) {
     throw new Error('ペアリング情報（秘密）が見つからないか、形式が不正です');
   }
   return { secret, server: s ? normalizeServer(s) : DEFAULT_SERVER };
+}
+
+/**
+ * 両端で同じペアかを目視確認するための短いコード（例 3fa2-91bc）。
+ * トピック名から作る。トピック名は秘密ではないので表示してよい。
+ * @param {string} topic
+ */
+export function pairCode(topic) {
+  const hex = [...decodeBase64url(topic).subarray(0, 4)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 4)}-${hex.slice(4)}`;
 }
 
 /**

@@ -78,6 +78,8 @@ export function decodeBase64url(s) {
   const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  // 余りビットが 0 でない表記（同じバイト列の別表記）は拒否する
+  if (encodeBase64url(out) !== s) throw new Error('base64url として不正です');
   return out;
 }
 

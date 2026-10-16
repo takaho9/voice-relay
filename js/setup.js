@@ -1,10 +1,12 @@
 import { deriveSession, generateSecret } from './crypto.js';
-import { $, copyText, pairCode, setStatus } from './page.js';
-import { DEFAULT_SERVER, buildPageUrl, formatPairing, normalizeServer } from './pairing.js';
+import { $, copyText, ensureTopLevel, setStatus } from './page.js';
+import { DEFAULT_SERVER, buildPageUrl, formatPairing, normalizeServer, pairCode } from './pairing.js';
 import { qrMatrix } from './qr.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SESSION_KEY = 'voice-relay:pairing';
+
+ensureTopLevel();
 
 /** @type {import('./pairing.js').Pairing} */
 let pairing = { secret: generateSecret(), server: DEFAULT_SERVER };
@@ -65,7 +67,16 @@ $('start-receive').addEventListener('click', () => {
   } catch {
     // sessionStorage が使えない環境では、受信ページで受信用 URL を貼り付けてもらう
   }
-  location.href = 'receive.html';
+  // 履歴を置き換えて、「戻る」でこのページ（秘密を表示している）に戻れないようにする
+  location.replace('receive.html');
+});
+
+// 別のページに移るときは、秘密を含む表示を消しておく（戻る/進むのキャッシュから復元されないように）
+addEventListener('pagehide', () => {
+  for (const id of ['qr', 'send-url', 'receive-url']) $(id).replaceChildren();
+});
+addEventListener('pageshow', (e) => {
+  if (e.persisted) location.reload();
 });
 
 $('apply-server').addEventListener('click', async () => {

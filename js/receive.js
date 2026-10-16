@@ -1,44 +1,34 @@
 import { Inbox, deriveSession, openBody } from './crypto.js';
-import { $, copyText, formatTime, lockConnectSrc, pairCode, setStatus } from './page.js';
+import { $, copyText, ensureTopLevel, formatTime, lockConnectSrc, setStatus } from './page.js';
 import { subscribe } from './ntfy.js';
-import { formatPairing, parsePairing } from './pairing.js';
+import { pairCode, parsePairing } from './pairing.js';
 import { revealHidden } from './text.js';
 
-// 受信ページは秘密を永続保存しない。
-// - URL のフラグメントで渡されたら、読み取ってすぐにアドレスバーから消す
-// - リロードに備えて sessionStorage（タブを閉じると消える）にだけ置く
+// 受信ページは秘密をどこにも保存しない（ページのメモリ上にだけ持つ）。
+// - URL のフラグメントで渡されたら、読み取ってすぐにアドレスバーと履歴から消す
+// - セットアップページからは sessionStorage で受け取り、読んだらすぐに消す。
+//   sessionStorage は「閉じたタブを開き直す」で復元されるので、置いたままにしない
+// そのためリロードすると受信用 URL の再入力が必要になる。
 
 const SESSION_KEY = 'voice-relay:pairing';
 
+ensureTopLevel();
+
 /** @returns {string | null} */
 function takeInitialPairing() {
+  let handoff = null;
+  try {
+    handoff = sessionStorage.getItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch {
+    // sessionStorage が使えない環境では入力欄から受け取る
+  }
   if (location.hash.length > 1) {
     const frag = location.hash.slice(1);
     history.replaceState(null, '', location.pathname + location.search);
     return frag;
   }
-  try {
-    return sessionStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function forgetPairing() {
-  try {
-    sessionStorage.removeItem(SESSION_KEY);
-  } catch {
-    // 何もしない
-  }
-}
-
-/** @param {string} frag */
-function rememberPairing(frag) {
-  try {
-    sessionStorage.setItem(SESSION_KEY, frag);
-  } catch {
-    // 保存できなくても受信はできる（リロードしたら再入力）
-  }
+  return handoff;
 }
 
 /** @param {import('./pairing.js').Pairing} pairing */
@@ -113,7 +103,6 @@ async function start(pairing) {
   });
   $('quit').addEventListener('click', () => {
     ctrl.abort();
-    forgetPairing();
     list.replaceChildren();
     location.replace('receive.html');
   });
@@ -145,11 +134,10 @@ let started = false;
 if (initial) {
   try {
     const pairing = parsePairing(initial);
-    rememberPairing(initial);
     started = true;
     await start(pairing);
   } catch {
-    forgetPairing();
+    // 不正な値なら入力欄を出す
   }
 }
 
@@ -162,7 +150,6 @@ if (!started) {
       const pairing = parsePairing(input.value);
       input.value = '';
       started = true;
-      rememberPairing(formatPairing(pairing));
       await start(pairing);
     } catch (e) {
       setStatus($('login-status'), e instanceof Error ? e.message : String(e), 'error');

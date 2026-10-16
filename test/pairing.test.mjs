@@ -41,3 +41,12 @@ test('サーバー URL の正規化と拒否', () => {
   assert.throws(() => normalizeServer('https://ntfy.sh/?x=1'));
   assert.throws(() => normalizeServer('not a url'));
 });
+
+test('確認コードは 16 進 8 桁で、トピックが違えば違う', async () => {
+  const { deriveSession } = await import('../js/crypto.js');
+  const { pairCode } = await import('../js/pairing.js');
+  const a = pairCode((await deriveSession(generateSecret())).topic);
+  const b = pairCode((await deriveSession(generateSecret())).topic);
+  assert.match(a, /^[0-9a-f]{4}-[0-9a-f]{4}$/);
+  assert.notEqual(a, b);
+});

@@ -15,6 +15,17 @@ export function lockConnectSrc(server) {
 }
 
 /**
+ * 他のサイトの iframe に埋め込まれていたら、表示を消して止める（クリックジャッキング対策）。
+ * GitHub Pages ではレスポンスヘッダー（frame-ancestors / X-Frame-Options）を設定できないため。
+ */
+export function ensureTopLevel() {
+  if (window.top !== window.self) {
+    document.documentElement.replaceChildren();
+    throw new Error('iframe 内では動作しません');
+  }
+}
+
+/**
  * @param {string} id
  * @returns {HTMLElement}
  */
@@ -27,15 +38,6 @@ export function $(id) {
 /** @param {number} ms */
 export function formatTime(ms) {
   return new Date(ms).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-/**
- * トピック名から、両端で一致を目視確認するための短いコードを作る。
- * トピック名は秘密ではないので表示してよい。
- * @param {string} topic
- */
-export function pairCode(topic) {
-  return `${topic.slice(0, 4)}-${topic.slice(4, 8)}`;
 }
 
 /**

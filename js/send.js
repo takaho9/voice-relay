@@ -1,10 +1,12 @@
 import { MAX_PARTS, MessageTooLongError, countParts, deriveSession, sealText } from './crypto.js';
-import { $, formatTime, lockConnectSrc, pairCode, setStatus } from './page.js';
+import { $, ensureTopLevel, formatTime, lockConnectSrc, setStatus } from './page.js';
 import { NtfyError, publish } from './ntfy.js';
-import { parsePairing } from './pairing.js';
+import { pairCode, parsePairing } from './pairing.js';
 
 // 送信ページは秘密を URL のフラグメントに置いたままにする（ブックマークして使うため）。
 // フラグメントはサーバーへのリクエストにも Referer にも含まれない。
+
+ensureTopLevel();
 
 const textEl = /** @type {HTMLTextAreaElement} */ ($('text'));
 const sendBtn = /** @type {HTMLButtonElement} */ ($('send'));

@@ -34,7 +34,7 @@
     <h2>2. 受信する</h2>
     <p><b>ブラウザで受信する場合:</b></p>
     <div class="row"><button type="button" class="primary" id="start-receive">このタブで受信を開始</button></div>
-    <p class="muted">秘密はこのタブの sessionStorage にだけ引き継がれ、タブを閉じると消えます。</p>
+    <p class="muted">秘密は受信ページに一度だけ引き継がれ、ブラウザには保存されません。受信ページをリロードしたときは、下の「受信用 URL」の貼り付けが必要です。</p>
 
     <p><b>ターミナルで受信する場合（Node.js 20 以上）:</b></p>
     <p>リポジトリを clone して <code>node cli/voice-relay.mjs import</code> を実行し、

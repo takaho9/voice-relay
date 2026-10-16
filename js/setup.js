@@ -52,14 +52,16 @@ async function render() {
 /** @param {string} id @param {() => string} get */
 function bindCopy(id, get) {
   const btn = /** @type {HTMLButtonElement} */ ($(id));
+  const label = btn.textContent;
   btn.addEventListener('click', async () => {
-    btn.textContent = (await copyText(get())) ? 'コピーしました' : 'コピーできませんでした';
-    setTimeout(() => { btn.textContent = 'コピー'; }, 1500);
+    btn.textContent = (await copyText(get())) ? 'コピーしました ✓' : 'コピーできませんでした';
+    setTimeout(() => { btn.textContent = label; }, 2000);
   });
 }
 
 bindCopy('copy-send', () => $('send-url').textContent ?? '');
 bindCopy('copy-receive', () => $('receive-url').textContent ?? '');
+bindCopy('copy-cmd', () => $('cmd-a').textContent ?? '');
 
 $('start-receive').addEventListener('click', () => {
   try {

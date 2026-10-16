@@ -16,11 +16,13 @@ import argparse
 import base64
 import binascii
 import errno
+import fcntl
 import getpass
 import json
 import os
 import re
 import secrets
+import select
 import shutil
 import signal
 import stat
@@ -501,7 +503,7 @@ def read_hidden(prompt):
     return getpass.getpass(prompt)
 
 
-def copy_to_clipboard(text):
+def _copy_with_command(text):
     if os.environ.get('WAYLAND_DISPLAY'):
         cands = [['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']]
     else:
@@ -519,6 +521,119 @@ def copy_to_clipboard(text):
     return False
 
 
+def _read_line(proc, timeout):
+    ready, _, _ = select.select([proc.stdout], [], [], timeout)
+    if not ready:
+        return None
+    return proc.stdout.readline().decode('utf-8', 'replace').strip()
+
+
+class Clipboard(object):
+    """wl-copy / xclip / xsel のどれかでコピーする。どれもなければ、GTK の補助プロセス
+    （clipboard_gtk.py、Ubuntu のデスクトップに標準で入っている PyGObject を使う）を常駐させてコピーする。"""
+
+    def __init__(self):
+        self._helper = None
+
+    def copy(self, text):
+        return _copy_with_command(text) or self._copy_with_gtk(text)
+
+    def _start_helper(self):
+        helper = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'clipboard_gtk.py')
+        try:
+            proc = subprocess.Popen([sys.executable, helper], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
+        except OSError:
+            return None
+        if _read_line(proc, 10) != 'ready':
+            proc.kill()
+            proc.wait()
+            return None
+        return proc
+
+    def _copy_with_gtk(self, text):
+        if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+            return False
+        for _ in range(2):  # 補助プロセスが落ちていたら 1 回だけ起動し直す
+            if self._helper is None or self._helper.poll() is not None:
+                self._helper = self._start_helper()
+                if self._helper is None:
+                    return False
+            try:
+                self._helper.stdin.write((json.dumps({'text': text}) + '\n').encode('ascii'))
+                self._helper.stdin.flush()
+                if _read_line(self._helper, 5) == 'ok':
+                    return True
+            except OSError:
+                pass
+            self.close()
+        return False
+
+    def close(self):
+        if self._helper is not None:
+            try:
+                self._helper.stdin.close()
+                self._helper.wait(timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                self._helper.kill()
+            self._helper = None
+
+
+def notify(summary, body):
+    """デスクトップ通知を出す（notify-send がなければ何もしない）。本文は含めないこと。"""
+    if not shutil.which('notify-send'):
+        return
+    try:
+        subprocess.run(['notify-send', '-a', 'voice-relay', '-i', 'edit-paste', summary, body],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _runtime_lock_path():
+    d = os.environ.get('XDG_RUNTIME_DIR')
+    if not d or not os.path.isdir(d):
+        return None
+    return os.path.join(d, 'voice-relay-receive.lock')
+
+
+def acquire_instance_lock():
+    """同じ PC で受信プロセスが 2 つ動かないようにする（XDG_RUNTIME_DIR は PC ごとの領域）。"""
+    path = _runtime_lock_path()
+    if path is None:
+        return None
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        fail('この PC では既に受信プロセスが動いています（常駐させている場合は service status で確認できます）。')
+    os.ftruncate(fd, 0)
+    os.write(fd, str(os.getpid()).encode('ascii'))
+    return fd
+
+
+def running_receiver_pid():
+    """常駐中の受信プロセスの PID（いなければ None）。"""
+    path = _runtime_lock_path()
+    if path is None or not os.path.exists(path):
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return None  # ロックが取れた = 誰も動いていない
+        except OSError:
+            pass
+        pid = os.read(fd, 32).decode('ascii', 'replace').strip()
+        return int(pid) if pid.isdigit() else None
+    finally:
+        os.close(fd)
+
+
 # ---------------------------------------------------------------------------
 # コマンド
 
@@ -534,7 +649,7 @@ def obtain_pairing(secret_file):
 
 
 def cmd_import(args):
-    info('Web のセットアップページの「受信用 URL」を貼り付けて Enter（画面には表示されません）。')
+    info('Web のセットアップページの「受信用 URL をコピー」を押し、ここに貼り付けて Enter（画面には表示されません）。')
     try:
         secret, server = parse_pairing(read_hidden('> '))
     except ValueError as e:
@@ -549,10 +664,17 @@ def cmd_receive(args):
     inbox = Inbox()
     started_ms = int(time.time() * 1000)
     out = sys.stdout
+    clipboard = Clipboard() if args.copy else None
+    lock = acquire_instance_lock()  # noqa: F841（プロセスが終わるまで保持する）
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     info('サーバー: {} / 確認コード: {}'.format(urllib.parse.urlsplit(server).netloc, session.pair_code()))
-    info('Ctrl-C で終了します。受信内容はファイルには保存しません（ターミナルのスクロールバックには残ります）。')
-    info('直近 10 分以内に送られたメッセージも表示されます。')
+    if args.no_print:
+        info('受信したテキストは表示しません（--no-print）。時刻と文字数だけを記録します。')
+    else:
+        info('Ctrl-C で終了します。受信内容はファイルには保存しません（ターミナルのスクロールバックには残ります）。')
+        info('直近 10 分以内に送られたメッセージも表示されます。')
+    state = {'was_open': False}
 
     def on_message(body):
         p = open_body(session, body)
@@ -561,25 +683,52 @@ def cmd_receive(args):
         m = inbox.accept(p)
         if m is None:
             return
-        head = '── {} '.format(time.strftime('%H:%M:%S', time.localtime(m['t'] / 1000)))
-        out.write('\n\x1b[2m{}{}\x1b[0m\n'.format(head, '─' * max(0, 40 - len(head))))
+        at = time.strftime('%H:%M:%S', time.localtime(m['t'] / 1000))
         shown, n = reveal_hidden(m['text'])
-        out.write(shown + '\n')
-        out.flush()
+        if args.no_print:
+            # 常駐時の出力はログ（journald）に残るので、本文は出さない
+            info('受信 {}（{} 文字）'.format(at, len(m['text'])))
+        else:
+            head = '── {} '.format(at)
+            out.write('\n\x1b[2m{}{}\x1b[0m\n'.format(head, '─' * max(0, 40 - len(head))))
+            out.write(shown + '\n')
+            out.flush()
         if n:
             info('（見えない文字・制御文字が {} 個含まれています）'.format(n))
         # 再起動のたびにクリップボードを上書きしないよう、コピーするのは起動後に送られたものだけ
-        if args.copy and m['t'] >= started_ms:
-            info('（クリップボードにコピーしました）' if copy_to_clipboard(m['text'])
-                 else '（コピーできませんでした。wl-copy / xclip / xsel が必要です）')
+        copied = None
+        if clipboard is not None and m['t'] >= started_ms:
+            copied = clipboard.copy(m['text'])
+            info('（クリップボードにコピーしました）' if copied
+                 else '（コピーできませんでした。xclip / xsel / wl-copy か、PyGObject（GTK）が必要です）')
+        if args.notify:
+            # 通知に本文は出さない（画面をのぞかれても内容が分からないように）
+            detail = '{} 文字'.format(len(m['text']))
+            if copied is True:
+                detail += '・クリップボードにコピーしました'
+            elif copied is False:
+                detail += '・コピーできませんでした'
+            if n:
+                detail += '・見えない文字を含みます'
+            notify('voice-relay: 受信しました', detail)
 
-    def on_state(state, error, wait):
-        if state == 'open':
+    def on_state(st, error, wait):
+        if st == 'open':
             info('受信待機中…')
-        elif state == 'retrying':
+            if args.notify and state['was_open'] is None:
+                notify('voice-relay: 再接続しました', '受信を再開しました')
+            state['was_open'] = True
+        elif st == 'retrying':
             info('{}（{} 秒後に再接続）'.format(str(error) if error else '接続が切れました。', wait))
+            if args.notify and state['was_open']:
+                notify('voice-relay: 接続が切れました', str(error) if error else '再接続します')
+                state['was_open'] = None  # 通知は切れたときと戻ったときの 1 回ずつ
 
-    subscribe(server, session.topic, on_message, on_state)
+    try:
+        subscribe(server, session.topic, on_message, on_state)
+    finally:
+        if clipboard is not None:
+            clipboard.close()
 
 
 def cmd_send(args):
@@ -610,6 +759,151 @@ def cmd_forget(args):
     info('{} を削除しました。'.format(args.secret_file))
 
 
+# ---------------------------------------------------------------------------
+# 常駐（ログイン中ずっと受信し、届いたらクリップボードにコピー）
+
+SERVICE_NAME = 'voice-relay.service'
+
+
+def _config_home():
+    return os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
+
+
+def _unit_path():
+    return os.path.join(_config_home(), 'systemd', 'user', SERVICE_NAME)
+
+
+def _autostart_path():
+    return os.path.join(_config_home(), 'autostart', 'voice-relay.desktop')
+
+
+def _receiver_command(secret_file):
+    return [sys.executable, os.path.abspath(__file__), '--secret-file', os.path.abspath(secret_file),
+            'receive', '--copy', '--no-print', '--notify']
+
+
+def _systemd_quote(arg):
+    return '"' + arg.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%') + '"'
+
+
+def _desktop_quote(arg):
+    escaped = arg
+    for ch in ('\\', '"', '`', '$'):
+        escaped = escaped.replace(ch, '\\' + ch)
+    return '"' + escaped.replace('%', '%%') + '"'
+
+
+def _systemctl(*args):
+    return subprocess.run(['systemctl', '--user'] + list(args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          universal_newlines=True)
+
+
+def _has_systemd_user():
+    if not shutil.which('systemctl'):
+        return False
+    try:
+        return _systemctl('show-environment').returncode == 0
+    except OSError:
+        return False
+
+
+def _write_private(path, content):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + '.tmp-' + secrets.token_hex(4)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+
+def service_install(args):
+    if not load_secret(args.secret_file):
+        # まだ秘密を取り込んでいなければ、ここで受信用 URL を尋ねる（import と同じ）
+        args.force = False
+        cmd_import(args)
+    cmd = _receiver_command(args.secret_file)
+    if _has_systemd_user():
+        _write_private(_unit_path(), '\n'.join([
+            '# voice-relay: ログイン中ずっと受信し、届いたテキストをクリップボードにコピーする',
+            '# 削除: python3 {} service uninstall'.format(os.path.abspath(__file__)),
+            '[Unit]',
+            'Description=voice-relay receiver (copy received text to clipboard)',
+            'PartOf=graphical-session.target',
+            'After=graphical-session.target',
+            '',
+            '[Service]',
+            'ExecStart=' + ' '.join(_systemd_quote(a) for a in cmd),
+            'Restart=on-failure',
+            'RestartSec=15',
+            '',
+            '[Install]',
+            'WantedBy=graphical-session.target',
+            '',
+        ]))
+        _systemctl('daemon-reload')
+        r = _systemctl('enable', '--now', SERVICE_NAME)
+        if r.returncode != 0:
+            fail('systemd への登録に失敗しました:\n' + r.stdout.strip())
+        time.sleep(2)
+        active = _systemctl('is-active', SERVICE_NAME).stdout.strip()
+        info('常駐を登録しました（systemd のユーザーサービス）。状態: {}'.format(active))
+        info('ログインするたびに自動で起動します。ログ: journalctl --user -u voice-relay -f')
+    else:
+        _write_private(_autostart_path(), '\n'.join([
+            '[Desktop Entry]',
+            'Type=Application',
+            'Name=voice-relay',
+            'Comment=Receive text and copy it to the clipboard',
+            'Exec=' + ' '.join(_desktop_quote(a) for a in cmd),
+            'Terminal=false',
+            'NoDisplay=true',
+            'X-GNOME-Autostart-enabled=true',
+            '',
+        ]))
+        if running_receiver_pid() is None:
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        info('常駐を登録しました（デスクトップの自動起動）。ログインするたびに自動で起動します。')
+    info('スマホから送ると、この PC のクリップボードにコピーされ、通知が出ます（本文は通知に出ません）。')
+
+
+def service_uninstall(args):
+    removed = False
+    if os.path.exists(_unit_path()):
+        _systemctl('disable', '--now', SERVICE_NAME)
+        os.unlink(_unit_path())
+        _systemctl('daemon-reload')
+        removed = True
+    if os.path.exists(_autostart_path()):
+        os.unlink(_autostart_path())
+        removed = True
+    pid = running_receiver_pid()
+    if pid is not None:
+        try:
+            with open('/proc/{}/cmdline'.format(pid), 'rb') as f:
+                if b'voice_relay.py' in f.read():
+                    os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    info('常駐を解除しました。' if removed else '常駐は登録されていませんでした。')
+
+
+def service_status(args):
+    if os.path.exists(_unit_path()):
+        info('登録: systemd のユーザーサービス（{}）'.format(_unit_path()))
+        info('状態: ' + _systemctl('is-active', SERVICE_NAME).stdout.strip())
+    elif os.path.exists(_autostart_path()):
+        info('登録: デスクトップの自動起動（{}）'.format(_autostart_path()))
+    else:
+        info('登録: なし')
+    pid = running_receiver_pid()
+    info('この PC で受信中のプロセス: ' + ('PID {}'.format(pid) if pid else 'なし'))
+
+
+def cmd_service(args):
+    {'install': service_install, 'uninstall': service_uninstall, 'status': service_status}[args.action](args)
+
+
 def main():
     if sys.version_info < (3, 8):
         fail('Python 3.8 以上が必要です。')
@@ -629,12 +923,18 @@ def main():
     p.add_argument('--force', action='store_true', help='既存の秘密を上書きする')
     p = sub.add_parser('receive', help='受信を開始する（Ctrl-C で終了）')
     p.add_argument('--copy', action='store_true',
-                   help='受信したテキストをクリップボードにもコピーする（wl-copy / xclip / xsel が必要。貼り付けは自分で行う）')
+                   help='受信したテキストをクリップボードにもコピーする（xclip / xsel / wl-copy か PyGObject が必要。'
+                        '貼り付けは自分で行う）')
+    p.add_argument('--no-print', action='store_true', help='受信したテキストを表示しない（時刻と文字数だけ）')
+    p.add_argument('--notify', action='store_true', help='受信したらデスクトップ通知を出す（本文は出さない）')
+    p = sub.add_parser('service', help='ログイン中ずっと受信してクリップボードにコピーする常駐プロセスを登録・解除する')
+    p.add_argument('action', choices=['install', 'uninstall', 'status'])
     sub.add_parser('send', help='標準入力のテキストを送る（動作確認用）')
     sub.add_parser('forget', help='保存した秘密を削除する')
     args = parser.parse_args()
     check_cryptography_version()
-    commands = {'import': cmd_import, 'receive': cmd_receive, 'send': cmd_send, 'forget': cmd_forget}
+    commands = {'import': cmd_import, 'receive': cmd_receive, 'send': cmd_send, 'forget': cmd_forget,
+                'service': cmd_service}
     if args.command not in commands:
         parser.print_help()
         return

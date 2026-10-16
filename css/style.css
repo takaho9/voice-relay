@@ -168,3 +168,34 @@ body.send h1 { font-size: 1.1rem; margin: 0 0 8px; }
   margin: 8px 0 0;
 }
 .message.copied { border-color: var(--ok); }
+
+/* セットアップの手順 */
+.lead { font-size: 1.1rem; }
+.step h2 { display: flex; align-items: center; gap: 10px; margin-top: 0; }
+.num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.95rem;
+  flex: none;
+}
+h3 { font-size: 1rem; margin: 0 0 4px; }
+.choice { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.choice:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+.substeps { padding-left: 1.4em; margin: 8px 0; }
+.substeps li { margin-bottom: 10px; }
+pre.cmd {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+details.card > summary { font-weight: 600; }

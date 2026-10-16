@@ -12,58 +12,80 @@
 </head>
 <body>
 <main>
-  <h1>voice-relay セットアップ</h1>
-  <p>スマホで入力したテキストを、暗号化してこの PC（または別の PC）に届けます。
-    秘密はこのブラウザの中だけで生成され、どこにも送信・保存されません。</p>
+  <h1>voice-relay</h1>
+  <p class="lead">スマホで入力した（話した）テキストを、暗号化してこの PC に届けます。</p>
+  <p class="muted">秘密はこのブラウザの中だけで作られ、どこにも送信・保存されません。
+    <b>このページを再読み込みすると別のペアに作り直される</b>ので、手順 1〜2 はこの画面のまま進めてください。</p>
 
   <noscript><p class="warn">JavaScript を有効にしてください。</p></noscript>
 
-  <section class="card">
-    <h2>1. スマホで送信ページを開く</h2>
-    <p>スマホのカメラでこの QR コードを読み取り、開いたページをブックマークかホーム画面に追加してください。</p>
+  <section class="card step">
+    <h2><span class="num">1</span>スマホで QR コードを読み取る</h2>
     <div id="qr" aria-label="送信ページの QR コード"></div>
-    <p class="muted">確認コード: <span id="pair-code" class="mono"></span>（送信・受信ページにも同じコードが表示されます）</p>
+    <p>開いたページを<b>ホーム画面に追加</b>（またはブックマーク）してください。次回からはそこから送れます。</p>
+    <p class="muted">確認コード <span id="pair-code" class="mono"></span> — スマホの画面右上にも同じコードが出ていれば OK です。</p>
     <details>
-      <summary>送信ページの URL を表示</summary>
+      <summary>QR コードが読み取れないとき</summary>
+      <p class="muted">次の URL をスマホで開いてください（この URL を知っている人はあなたにメッセージを送れるので、他人に見せないでください）。</p>
       <p class="url-box" id="send-url"></p>
-      <div class="row"><button type="button" id="copy-send">コピー</button></div>
+      <div class="row"><button type="button" id="copy-send">URL をコピー</button></div>
     </details>
   </section>
 
-  <section class="card">
-    <h2>2. 受信する</h2>
-    <p><b>ブラウザで受信する場合:</b></p>
-    <div class="row"><button type="button" class="primary" id="start-receive">このタブで受信を開始</button></div>
-    <p class="muted">秘密は受信ページに一度だけ引き継がれ、ブラウザには保存されません。受信ページをリロードしたときは、下の「受信用 URL」の貼り付けが必要です。</p>
+  <section class="card step">
+    <h2><span class="num">2</span>この PC での受け取り方を選ぶ</h2>
 
-    <p><b>ターミナルで受信する場合:</b></p>
-    <p>リポジトリを clone して <code>python3 cli/voice_relay.py import</code>
-      （Node.js 20 以上なら <code>node cli/voice-relay.mjs import</code>）を実行し、
-      下の「受信用 URL」を貼り付けてください。以後は <code>receive</code> で受信できます。
-      Python 版には <code>python3 -m pip install --user --upgrade "cryptography&gt;=50.0.2"</code> が必要です。</p>
+    <div class="choice">
+      <h3>A. ターミナルで常駐させる（おすすめ・Linux）</h3>
+      <p>届いたら自動でクリップボードにコピーされ、通知が出ます。<code>Ctrl+V</code> で貼り付けるだけです。次回からはログインするだけで動きます。</p>
+      <ol class="substeps">
+        <li>
+          <p>ターミナルで次のコマンドを実行します。</p>
+          <pre class="cmd" id="cmd-a">python3 -m pip install --user --upgrade "cryptography&gt;=50.0.2"
+git clone https://github.com/takaho9/voice-relay.git ~/voice-relay
+python3 ~/voice-relay/cli/voice_relay.py service install</pre>
+          <div class="row"><button type="button" id="copy-cmd">コマンドをコピー</button></div>
+        </li>
+        <li>
+          <p>ターミナルが受信用 URL の貼り付けを求めたら、このボタンを押し、ターミナルに貼り付けて Enter（貼り付けた内容は画面に表示されません）。</p>
+          <div class="row"><button type="button" class="primary" id="copy-receive">受信用 URL をコピー</button></div>
+        </li>
+      </ol>
+      <details>
+        <summary>受信用 URL を表示</summary>
+        <p class="warn">この URL を知っている人は、あなた宛てのメッセージを読むことも、偽のメッセージを送ることもできます。
+          共有 PC のファイルやチャットに残さないでください。</p>
+        <p class="url-box" id="receive-url"></p>
+      </details>
+    </div>
 
-    <details>
-      <summary>受信用 URL を表示（別の PC で受信する場合など）</summary>
-      <p class="warn">この URL を知っている人は、あなた宛てのメッセージを読むことも、偽のメッセージを送ることもできます。
-        共有 PC のファイルやチャットに残さないでください。</p>
-      <p class="url-box" id="receive-url"></p>
-      <div class="row"><button type="button" id="copy-receive">コピー</button></div>
-    </details>
+    <div class="choice">
+      <h3>B. このブラウザで受け取る（インストールなし）</h3>
+      <p>届いたテキストがこのタブに表示されるので、「コピー」を押して貼り付けます。</p>
+      <div class="row"><button type="button" class="primary" id="start-receive">このタブで受信を開始</button></div>
+      <p class="muted">秘密はブラウザに保存されないので、次回は受信ページに受信用 URL の貼り付けが必要です。</p>
+    </div>
   </section>
 
-  <section class="card">
-    <h2>設定</h2>
+  <section class="card step">
+    <h2><span class="num">3</span>スマホから送ってみる</h2>
+    <p>スマホで話して（入力して）「送信」を押します。PC に届けば完了です。A を選んだ場合、このページはもう閉じて構いません。</p>
+    <p class="muted">パスワードなどの機密は送らないでください。試験中など外部との通信が禁止されている場面では使わないでください。</p>
+  </section>
+
+  <details class="card">
+    <summary>詳細設定（ntfy サーバーの変更・ペアの作り直し）</summary>
     <label for="server">ntfy サーバー（自前でホストしている場合に変更）</label>
     <div class="row">
       <input type="url" id="server" spellcheck="false" autocomplete="off">
       <button type="button" id="apply-server">適用</button>
     </div>
     <p class="status" id="server-status" aria-live="polite"></p>
-    <div class="row"><button type="button" id="regenerate">新しい秘密を作り直す</button></div>
+    <div class="row"><button type="button" id="regenerate">ペアを作り直す</button></div>
     <p class="muted">作り直すと、以前の送信ページ（ブックマーク）は使えなくなります。</p>
-  </section>
+  </details>
 
-  <p class="muted"><a href="https://github.com/takaho9/voice-relay" rel="noreferrer">ソースコードと説明（README）</a></p>
+  <p class="muted"><a href="https://github.com/takaho9/voice-relay#readme" rel="noreferrer">使い方の詳細・仕組み・注意事項（README）</a></p>
 </main>
 </body>
 </html>

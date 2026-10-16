@@ -43,9 +43,13 @@ def on_input(_fd, condition):
         sys.stdout.write('error\n')
         sys.stdout.flush()
         return True
-    clipboard.set_text(text, -1)
-    clipboard.store()
-    sys.stdout.write('ok\n')
+    try:
+        clipboard.set_text(text, -1)
+        clipboard.store()
+        reply = 'ok'
+    except Exception:  # noqa: BLE001  1 件の失敗で補助プロセス全体が止まらないようにする
+        reply = 'error'
+    sys.stdout.write(reply + '\n')
     sys.stdout.flush()
     return True
 

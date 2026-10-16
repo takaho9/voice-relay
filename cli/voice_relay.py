@@ -16,6 +16,7 @@ import argparse
 import base64
 import binascii
 import errno
+import http.client
 import fcntl
 import getpass
 import json
@@ -28,6 +29,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 import urllib.error
@@ -46,6 +48,14 @@ except ImportError:
         '  python3 -m pip install --user --upgrade "cryptography>=50.0.2"\n'
     )
     sys.exit(1)
+
+# このファイルのバージョン。更新したら version.json と package.json も同じ値にする（テストで確認している）
+VERSION = '1.1.0'
+
+# アップデートの確認先（GitHub Pages で公開している version.json）。フォークした場合は書き換えるか、
+# 環境変数 VOICE_RELAY_PAGES_URL で指定する
+DEFAULT_PAGES_URL = 'https://takaho9.github.io/voice-relay/'
+UPDATE_CHECK_INTERVAL_SEC = 24 * 60 * 60
 
 # ---------------------------------------------------------------------------
 # 定数（js/crypto.js・js/pairing.js と同じ値にすること）
@@ -117,7 +127,7 @@ def b64url_encode(data):
 
 def b64url_decode(s):
     """パディングなし・正準形の base64url だけを受け付ける。"""
-    if not isinstance(s, str) or not B64URL_RE.match(s) or len(s) % 4 == 1:
+    if not isinstance(s, str) or not B64URL_RE.fullmatch(s) or len(s) % 4 == 1:
         raise ValueError('base64url として不正です')
     try:
         out = base64.urlsafe_b64decode(s + '=' * (-len(s) % 4))
@@ -136,8 +146,22 @@ def normalize_server(value):
         raise ValueError('ntfy サーバーは https:// の URL にしてください')
     if u.username or u.password or u.query or u.fragment:
         raise ValueError('ntfy サーバーの URL にユーザー名・クエリ・# は含められません')
-    netloc = host + (':{}'.format(u.port) if u.port else '')
-    return '{}://{}{}'.format(u.scheme, netloc, u.path).rstrip('/')
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in str(value).strip()):
+        raise ValueError('ntfy サーバーの URL が不正です')
+    segments = u.path.split('/')
+    if '.' in segments or '..' in segments:
+        raise ValueError('ntfy サーバーの URL が不正です')
+    try:
+        port = u.port
+        host = host.encode('idna').decode('ascii')
+    except (ValueError, UnicodeError):
+        raise ValueError('ntfy サーバーの URL が不正です')
+    # JS の URL と同じく、既定のポートは省き、パスはパーセントエンコードする（ペアリングの s= を一致させるため）
+    if port == {'https': 443, 'http': 80}[u.scheme]:
+        port = None
+    netloc = host + (':{}'.format(port) if port else '')
+    path = urllib.parse.quote(u.path, safe="/%-._~!$&'()*+,;=:@")
+    return '{}://{}{}'.format(u.scheme, netloc, path).rstrip('/')
 
 
 def parse_pairing(text):
@@ -262,7 +286,7 @@ def open_body(session, body):
     if not isinstance(p, dict):
         return None
     ok = (
-        isinstance(p.get('id'), str) and ID_RE.match(p['id'])
+        isinstance(p.get('id'), str) and ID_RE.fullmatch(p['id'])
         and _is_int(p.get('t')) and 0 < p['t'] <= 2 ** 53 - 1
         and _is_int(p.get('n')) and 1 <= p['n'] <= MAX_PARTS
         and _is_int(p.get('i')) and 0 <= p['i'] < p['n']
@@ -379,10 +403,10 @@ def publish(server, topic, body):
                                  headers={'Content-Type': 'text/plain', 'Firebase': 'no'})
     try:
         with _opener.open(req, timeout=30) as res:
-            res.read()
+            res.read(64 * 1024)  # 応答の中身は使わない。巨大な応答でメモリを使わないよう上限を置く
     except urllib.error.HTTPError as e:
         raise _error_for_status(e.code)
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
         raise NtfyError('network', 'ntfy サーバーに接続できませんでした。通信状態を確認してください。')
 
 
@@ -413,14 +437,14 @@ def subscribe(server, topic, on_message, on_state, since='10m', idle_timeout=90)
                     except (ValueError, UnicodeDecodeError):
                         continue
                     if isinstance(ev, dict) and ev.get('event') == 'message' and isinstance(ev.get('message'), str):
-                        if isinstance(ev.get('id'), str) and NTFY_ID_RE.match(ev['id']):
+                        if isinstance(ev.get('id'), str) and NTFY_ID_RE.fullmatch(ev['id']):
                             since = ev['id']
                         on_message(ev['message'])
         except urllib.error.HTTPError as e:
             error = _error_for_status(e.code)
         except NtfyError as e:
             error = e
-        except (urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
             error = NtfyError('network', 'ntfy サーバーとの接続が切れました。再接続します。')
         wait = max(backoff, 60) if error is not None and error.kind == 'rate' else backoff
         on_state('retrying', error, wait)
@@ -536,6 +560,8 @@ class Clipboard(object):
         self._helper = None
 
     def copy(self, text):
+        # 孤立サロゲートはクリップボードに設定できないので U+FFFD に置き換える
+        text = ''.join('\ufffd' if 0xd800 <= ord(ch) <= 0xdfff else ch for ch in text)
         return _copy_with_command(text) or self._copy_with_gtk(text)
 
     def _start_helper(self):
@@ -593,8 +619,8 @@ class Clipboard(object):
 # WM_CLASS にこれらの文字列が含まれるウィンドウは端末とみなし、Ctrl+Shift+V で貼り付ける
 TERMINAL_CLASS_HINTS = (
     'terminal', 'xterm', 'rxvt', 'kitty', 'alacritty', 'konsole', 'terminator', 'tilix', 'wezterm',
-    'st-256color', 'foot', 'guake', 'yakuake', 'terminology', 'sakura', 'ghostty', 'tabby', 'hyper',
-    'warp', 'contour', 'blackbox', 'ptyxis', 'kgx', 'console', 'tmux', 'screen', 'putty', 'remmina',
+    'st-256color', 'foot', 'guake', 'yakuake', 'terminology', 'sakura', 'ghostty', 'tabby',
+    'warp-terminal', 'contour', 'blackbox', 'ptyxis', 'kgx', 'console', 'putty', 'remmina',
 )
 # Ctrl+Shift+V で CLIPBOARD を貼り付けられない端末（Shift+Insert で PRIMARY を貼る）。コピーだけにする
 UNSUPPORTED_TERMINAL_CLASSES = ('"xterm"', 'rxvt')
@@ -604,8 +630,11 @@ _CONTROL_RE = re.compile('[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')
 
 
 def flatten_for_typing(text):
-    """入力用に、改行を空白にし、制御文字を取り除く（タブは残す）。"""
-    return _CONTROL_RE.sub('', _LINE_BREAKS_RE.sub(' ', text)).strip()
+    """入力用に、改行を空白にし、制御文字と見えない文字（表示の向きを変える文字・幅ゼロの文字・タグ文字など）を
+    取り除く（タブと、絵文字に使う ZWJ / 異体字セレクタ U+FE0E・U+FE0F は残す）。
+    見えない文字を残すと、Enter を押す前に目で確認しても中身が分からなくなるため。"""
+    flat = _CONTROL_RE.sub('', _LINE_BREAKS_RE.sub(' ', text))
+    return ''.join(ch for ch in flat if ch == '\t' or not _is_hidden(ch)).strip()
 
 
 def _run(cmd, timeout=3):
@@ -618,27 +647,44 @@ def _run(cmd, timeout=3):
 
 
 def _screen_locked():
-    """GNOME などの画面ロック中か（判定できなければ False）。"""
-    if not shutil.which('gdbus'):
-        return False
-    for dest, path in (('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver'),
-                       ('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver')):
-        out = _run(['gdbus', 'call', '--session', '--dest', dest, '--object-path', path,
-                    '--method', dest + '.GetActive'])
-        if out is not None:
-            return 'true' in out
-    return False
+    """画面ロック中か。True / False、判定できなければ None（呼び出し側は入力しない）。"""
+    if shutil.which('gdbus'):
+        for dest, path in (('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver'),
+                           ('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver')):
+            out = _run(['gdbus', 'call', '--session', '--dest', dest, '--object-path', path,
+                        '--method', dest + '.GetActive'])
+            if out is not None:
+                return 'true' in out
+    # systemd-logind の LockedHint（GNOME 以外の画面ロックでも設定されることが多い）
+    sid = os.environ.get('XDG_SESSION_ID')
+    if not sid and shutil.which('loginctl'):
+        out = _run(['loginctl', 'show-user', str(os.getuid()), '-p', 'Display', '--value'])
+        sid = out.strip() if out else None
+    if sid and shutil.which('loginctl'):
+        out = _run(['loginctl', 'show-session', sid, '-p', 'LockedHint', '--value'])
+        if out is not None and out.strip() in ('yes', 'no'):
+            return out.strip() == 'yes'
+    return None
+
+
+def _active_window():
+    wid = _run(['xdotool', 'getactivewindow'])
+    return wid.strip() if wid and wid.strip().isdigit() else None
+
+
+def _focused_window():
+    """フォーカス中のウィンドウの (ID, WM_CLASS（小文字）)。取れなければ (None, None)。"""
+    wid = _active_window()
+    if wid is None:
+        return None, None
+    out = _run(['xprop', '-id', wid, 'WM_CLASS'])
+    if not out or '=' not in out:
+        return None, None
+    return wid, out.split('=', 1)[1].strip().lower()
 
 
 def _focused_window_class():
-    """フォーカス中のウィンドウの WM_CLASS（小文字）。取れなければ None。"""
-    wid = _run(['xdotool', 'getactivewindow'])
-    if not wid or not wid.strip().isdigit():
-        return None
-    out = _run(['xprop', '-id', wid.strip(), 'WM_CLASS'])
-    if not out or '=' not in out:
-        return None
-    return out.split('=', 1)[1].strip().lower()
+    return _focused_window()[1]
 
 
 def typing_unavailable_reason():
@@ -659,17 +705,79 @@ def paste_into_focused(clipboard_ready):
     reason = typing_unavailable_reason()
     if reason:
         return '入力しませんでした（{}）'.format(reason)
-    if _screen_locked():
+    locked = _screen_locked()
+    if locked is None:
+        return '画面ロックの状態を判定できなかったので入力しませんでした'
+    if locked:
         return '画面ロック中なので入力しませんでした'
-    cls = _focused_window_class()
+    wid, cls = _focused_window()
     if cls is None:
         return 'フォーカス先を判定できなかったので入力しませんでした'
     if any(u in cls for u in UNSUPPORTED_TERMINAL_CLASSES):
         return 'この端末には入力できないのでコピーだけしました（Shift+Insert ではなく、メニューから貼り付けてください）'
     terminal = any(h in cls for h in TERMINAL_CLASS_HINTS)
+    # 判定してからキーを送るまでの間にフォーカスが移っていたら送らない
+    if _active_window() != wid:
+        return 'フォーカスが移ったので入力しませんでした'
     if _run(['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v' if terminal else 'ctrl+v']) is None:
         return '入力に失敗しました'
     return '端末に入力しました（Enter は押していません）' if terminal else '入力しました'
+
+
+# ---------------------------------------------------------------------------
+# アップデートの確認（推奨するだけで、自動では更新しない）
+
+def _version_tuple_strict(s):
+    if not isinstance(s, str) or not re.fullmatch(r'\d{1,4}(\.\d{1,4}){0,2}', s):
+        return None
+    return tuple(int(x) for x in (s.split('.') + ['0', '0'])[:3])
+
+
+def fetch_latest_version():
+    """公開されている最新版の情報 {'version', 'security', 'message'}。取れなければ None。"""
+    base = os.environ.get('VOICE_RELAY_PAGES_URL') or DEFAULT_PAGES_URL
+    url = urllib.parse.urljoin(base if base.endswith('/') else base + '/', 'version.json')
+    if not url.startswith('https://'):
+        return None
+    try:
+        with _opener.open(urllib.request.Request(url, headers={'Cache-Control': 'no-cache'}), timeout=15) as res:
+            data = json.loads(res.read(16 * 1024).decode('utf-8'))
+    except (urllib.error.URLError, OSError, ValueError, UnicodeDecodeError, http.client.HTTPException):
+        return None
+    if not isinstance(data, dict) or _version_tuple_strict(data.get('version')) is None:
+        return None
+    message = data.get('message') if isinstance(data.get('message'), str) else ''
+    # 表示するのはリポジトリの持ち主が書いた文だが、念のため見えない文字を除き、長さも制限する
+    message = flatten_for_typing(message)[:200]
+    return {'version': data['version'], 'security': data.get('security') is True, 'message': message}
+
+
+def update_notice(latest):
+    """更新を勧める文（不要なら None）。"""
+    if latest is None or _version_tuple_strict(latest['version']) <= _version_tuple_strict(VERSION):
+        return None
+    head = '{}新しいバージョン {} があります（いまは {}）。'.format(
+        'セキュリティ修正を含む' if latest['security'] else '', latest['version'], VERSION)
+    cmd = 'python3 {} update'.format(os.path.abspath(__file__))
+    return head + (latest['message'] + '。' if latest['message'] else '') + '更新: ' + cmd
+
+
+def start_update_checker(use_notify):
+    """起動時と 24 時間ごとに確認し、新しい版があれば知らせる（同じ版は 1 回だけ）。"""
+    told = set()
+
+    def loop():
+        while True:
+            latest = fetch_latest_version()
+            text = update_notice(latest)
+            if text and latest['version'] not in told:
+                told.add(latest['version'])
+                info(text)
+                if use_notify:
+                    notify('voice-relay: アップデートがあります' + ('（セキュリティ修正）' if latest['security'] else ''), text)
+            time.sleep(UPDATE_CHECK_INTERVAL_SEC)
+
+    threading.Thread(target=loop, name='update-check', daemon=True).start()
 
 
 def notify(summary, body):
@@ -830,6 +938,8 @@ def cmd_receive(args):
                 notify('voice-relay: 接続が切れました', str(error) if error else '再接続します')
                 state['was_open'] = None  # 通知は切れたときと戻ったときの 1 回ずつ
 
+    if not args.no_update_check:
+        start_update_checker(args.notify)
     try:
         subscribe(server, session.topic, on_message, on_state)
     finally:
@@ -855,6 +965,37 @@ def cmd_send(args):
     except (ValueError, NtfyError) as e:
         fail(str(e))
     info('送信しました（{} 通）。'.format(len(bodies)))
+
+
+def cmd_update(args):
+    """git pull で最新版にし、常駐していれば再起動する。"""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not shutil.which('git') or _run(['git', '-C', repo, 'rev-parse', '--is-inside-work-tree']) is None:
+        fail('{} は git で取得したディレクトリではありません。git clone し直してください。'.format(repo))
+    info('{} を更新します（git pull --ff-only）。'.format(repo))
+    r = subprocess.run(['git', '-C', repo, 'pull', '--ff-only'])
+    if r.returncode != 0:
+        fail('git pull に失敗しました。手元で変更している場合は git -C {} status で確認してください。'.format(repo))
+    new_version = _run([sys.executable, os.path.abspath(__file__), '--version'])
+    info('更新後のバージョン: {}'.format(new_version.strip() if new_version else '不明'))
+    if os.path.exists(_unit_path()):
+        _systemctl('daemon-reload')
+        r = _systemctl('restart', SERVICE_NAME)
+        info('常駐を再起動しました。' if r.returncode == 0 else '常駐の再起動に失敗しました: ' + r.stdout.strip())
+    elif os.path.exists(_autostart_path()):
+        pid = running_receiver_pid()
+        if pid is not None:
+            try:
+                with open('/proc/{}/cmdline'.format(pid), 'rb') as f:
+                    cmdline = f.read().split(b'\0')
+                if any(b'voice_relay.py' in a for a in cmdline):
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(1)
+                    subprocess.Popen([a.decode() for a in cmdline if a], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    info('受信プロセスを再起動しました。')
+            except OSError:
+                info('受信プロセスを再起動できませんでした。ログインし直してください。')
 
 
 def cmd_forget(args):
@@ -913,7 +1054,7 @@ def _has_systemd_user():
         return False
 
 
-def _write_private(path, content):
+def _write_config(path, content):
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     tmp = path + '.tmp-' + secrets.token_hex(4)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o644)
@@ -928,8 +1069,12 @@ def service_install(args):
         args.force = False
         cmd_import(args)
     cmd = _receiver_command(args.secret_file, getattr(args, 'type', False))
+    # systemd のユニットや .desktop の書式を壊しうる文字（引用符・バックスラッシュ・改行など）を含むパスは扱わない
+    bad = [a for a in cmd if not re.fullmatch(r"[A-Za-z0-9/._+=:@%~ -]+", a)]
+    if bad:
+        fail('パスに使えない文字が含まれています（英数字と / . _ + = : @ % ~ - 空白 のみ対応）: {}'.format(bad[0]))
     if _has_systemd_user():
-        _write_private(_unit_path(), '\n'.join([
+        _write_config(_unit_path(), '\n'.join([
             '# voice-relay: ログイン中ずっと受信し、届いたテキストをクリップボードにコピーする',
             '# 削除: python3 {} service uninstall'.format(os.path.abspath(__file__)),
             '[Unit]',
@@ -955,7 +1100,7 @@ def service_install(args):
         info('常駐を登録しました（systemd のユーザーサービス）。状態: {}'.format(active))
         info('ログインするたびに自動で起動します。ログ: journalctl --user -u voice-relay -f')
     else:
-        _write_private(_autostart_path(), '\n'.join([
+        _write_config(_autostart_path(), '\n'.join([
             '[Desktop Entry]',
             'Type=Application',
             'Name=voice-relay',
@@ -1022,6 +1167,7 @@ def main():
     parser = argparse.ArgumentParser(
         prog='voice_relay.py',
         description='voice-relay のターミナル版（Python）。秘密の作成は Web のセットアップページで行い、import で取り込みます。')
+    parser.add_argument('--version', action='version', version=VERSION)
     parser.add_argument('--secret-file', default=default_secret_file(),
                         help='秘密の保存先（既定: ~/.config/voice-relay/secret）')
     sub = parser.add_subparsers(dest='command')
@@ -1033,6 +1179,7 @@ def main():
                         '貼り付けは自分で行う）')
     p.add_argument('--no-print', action='store_true', help='受信したテキストを表示しない（時刻と文字数だけ）')
     p.add_argument('--notify', action='store_true', help='受信したらデスクトップ通知を出す（本文は出さない）')
+    p.add_argument('--no-update-check', action='store_true', help='アップデートの確認（1 日 1 回、GitHub Pages）をしない')
     p.add_argument('--type', action='store_true',
                    help='フォーカス中の入力欄に貼り付ける（X11 + xdotool。改行は空白にし Enter は押さない。端末は Ctrl+Shift+V）')
     p = sub.add_parser('service', help='ログイン中ずっと受信してクリップボードにコピーする常駐プロセスを登録・解除する')
@@ -1041,10 +1188,11 @@ def main():
                    help='install: 受信したらフォーカス中の入力欄にも貼り付ける（X11 + xdotool のみ）')
     sub.add_parser('send', help='標準入力のテキストを送る（動作確認用）')
     sub.add_parser('forget', help='保存した秘密を削除する')
+    sub.add_parser('update', help='最新版に更新し（git pull）、常駐していれば再起動する')
     args = parser.parse_args()
     check_cryptography_version()
     commands = {'import': cmd_import, 'receive': cmd_receive, 'send': cmd_send, 'forget': cmd_forget,
-                'service': cmd_service}
+                'service': cmd_service, 'update': cmd_update}
     if args.command not in commands:
         parser.print_help()
         return

@@ -130,9 +130,17 @@ async function send() {
       ok = true;
       setStatus(statusEl, `送信しました（${formatTime(Date.now())}）`, 'ok');
     } else {
-      // 送信中に途中が書き換えられた。二重に送らないよう、自動送信はせずに残す
-      setStatus(statusEl, `送信しました（${formatTime(Date.now())}）。送信中に編集された内容は残してあります。` +
-        '必要なら確認してから送信してください。', 'ok');
+      // 送信中に途中が書き換えられた（音声入力キーボードが前の単語を直した場合など）。
+      // 送った内容と共通の先頭部分は送信済みとして取り除き、残りだけを残す（同じ文を二重に送らないように）。
+      // 残りは自動では送らず、次に入力されたとき（または送信ボタン）に送る
+      const current = textEl.value;
+      let common = 0;
+      while (common < text.length && common < current.length && text[common] === current[common]) common++;
+      // サロゲートペア（絵文字など）の途中で切らない
+      if (common > 0 && /[\ud800-\udbff]/.test(text[common - 1])) common--;
+      textEl.value = current.slice(common).replace(/^\s+/, '');
+      setStatus(statusEl, `送信しました（${formatTime(Date.now())}）。` +
+        (textEl.value ? '送信中に編集された部分は残してあります。必要なら確認してから送信してください。' : ''), 'ok');
     }
   } catch (e) {
     let msg;
@@ -200,6 +208,5 @@ addEventListener('pageshow', focusInput);
 
 applyMode();
 focusInput();
+// 開いた時点で入力欄に残っている文字（ブラウザが前回の内容を復元した場合など）は自動では送らない
 updateCounter();
-// 準備ができる前に入力されていた分も送る
-scheduleAuto();

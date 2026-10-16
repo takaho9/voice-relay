@@ -167,17 +167,18 @@ class TypingTest(unittest.TestCase):
         for cls in ['"gedit", "Gedit"', '"google-chrome", "Google-chrome"', '"code", "Code"', '"slack", "Slack"']:
             self.assertFalse(any(h in cls.lower() for h in v.TERMINAL_CLASS_HINTS), cls)
 
-    def _paste_with(self, wm_class):
+    def _paste_with(self, wm_class, locked=False, active_after='1'):
         sent = []
-        saved = (v.typing_unavailable_reason, v._screen_locked, v._focused_window_class, v._run)
+        saved = (v.typing_unavailable_reason, v._screen_locked, v._focused_window, v._active_window, v._run)
         try:
             v.typing_unavailable_reason = lambda: None
-            v._screen_locked = lambda: False
-            v._focused_window_class = lambda: wm_class
+            v._screen_locked = lambda: locked
+            v._focused_window = lambda: ('1' if wm_class else None, wm_class)
+            v._active_window = lambda: active_after
             v._run = lambda cmd, timeout=3: sent.append(cmd) or ''
             return v.paste_into_focused(True), sent
         finally:
-            v.typing_unavailable_reason, v._screen_locked, v._focused_window_class, v._run = saved
+            v.typing_unavailable_reason, v._screen_locked, v._focused_window, v._active_window, v._run = saved
 
     def test_paste_key_by_window(self):
         result, sent = self._paste_with('"gedit", "gedit"')
@@ -193,6 +194,20 @@ class TypingTest(unittest.TestCase):
         result, sent = self._paste_with(None)
         self.assertIn('判定できなかった', result)
         self.assertEqual(sent, [])
+
+    def test_lock_and_focus_change_block_typing(self):
+        for locked, expect in [(True, '画面ロック中'), (None, '判定できなかった')]:
+            result, sent = self._paste_with('"gedit", "gedit"', locked=locked)
+            self.assertIn(expect, result)
+            self.assertEqual(sent, [])
+        result, sent = self._paste_with('"gedit", "gedit"', active_after='2')
+        self.assertIn('フォーカスが移った', result)
+        self.assertEqual(sent, [])
+
+    def test_flatten_removes_hidden_chars(self):
+        out = v.flatten_for_typing('rm -rf ~/x\u202e\u2066abc\u200b\ufeff\U000e0041 \u2764\ufe0f \U0001F469\u200d\U0001F4BB')
+        self.assertEqual(out, 'rm -rf ~/xabc \u2764\ufe0f \U0001F469\u200d\U0001F4BB')
+        self.assertEqual(v.reveal_hidden(out)[1], 0)
 
     def test_flatten_blocks_bracketed_paste_escape(self):
         # 貼り付けの終わりを装う ESC[201~ や C1 の CSI（0x9b）は取り除かれる
@@ -211,6 +226,68 @@ class TypingTest(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(old)
+
+
+class ReviewRegressionTest(unittest.TestCase):
+    def test_id_regex_rejects_trailing_newline(self):
+        s = v.Session(os.urandom(32))
+        payload = json.dumps({'id': 'A' * 22 + '\n', 't': 1790000000000, 'i': 0, 'n': 1, 'x': 'x'}).encode()
+        iv = os.urandom(12)
+        body = v.b64url_encode(bytes([1]) + iv + s.aead.encrypt(iv, payload, v.AAD))
+        self.assertIsNone(v.open_body(s, body))
+
+    def test_normalize_server_matches_js_url(self):
+        self.assertEqual(v.normalize_server('https://ntfy.sh:443/'), 'https://ntfy.sh')
+        self.assertEqual(v.normalize_server('https://N.Example.com:8443/a/'), 'https://n.example.com:8443/a')
+        self.assertEqual(v.normalize_server('https://xn--tda.example'), 'https://xn--tda.example')
+        self.assertEqual(v.normalize_server('https://\u00fc.example'), 'https://xn--tda.example')
+        for bad in ('https://ntfy.sh/x y', 'https://ntfy.sh/a/../b', 'https://ntfy.sh/./a', 'https://ntfy.sh/\x01'):
+            with self.assertRaises(ValueError, msg=bad):
+                v.normalize_server(bad)
+
+    def test_publish_bad_url_raises_ntfy_error(self):
+        with self.assertRaises(v.NtfyError):
+            v.publish('http://127.0.0.1:9/x y', 't', 'AAAA')
+
+    def test_service_rejects_unsafe_paths(self):
+        class A(object):
+            secret_file = '/tmp/q"uote/secret'
+            type = False
+        saved = v.load_secret
+        try:
+            v.load_secret = lambda path: (b'\0' * 32, 'https://ntfy.sh')
+            with self.assertRaises(SystemExit):
+                v.service_install(A())
+        finally:
+            v.load_secret = saved
+
+
+class UpdateCheckTest(unittest.TestCase):
+    ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+
+    def test_versions_are_in_sync(self):
+        with open(os.path.join(self.ROOT, 'version.json'), encoding='utf-8') as f:
+            published = json.load(f)
+        with open(os.path.join(self.ROOT, 'package.json'), encoding='utf-8') as f:
+            package = json.load(f)
+        self.assertEqual(published['version'], v.VERSION, 'version.json と cli/voice_relay.py の VERSION を揃える')
+        self.assertEqual(package['version'], v.VERSION, 'package.json と cli/voice_relay.py の VERSION を揃える')
+        self.assertIsInstance(published.get('security'), bool)
+
+    def test_update_notice(self):
+        newer = '.'.join(str(x + (1 if i == 2 else 0)) for i, x in enumerate(v._version_tuple_strict(v.VERSION)))
+        self.assertIsNone(v.update_notice(None))
+        self.assertIsNone(v.update_notice({'version': v.VERSION, 'security': True, 'message': ''}))
+        self.assertIsNone(v.update_notice({'version': '0.0.1', 'security': False, 'message': ''}))
+        text = v.update_notice({'version': newer, 'security': True, 'message': '修正'})
+        self.assertIn('セキュリティ修正を含む', text)
+        self.assertIn(newer, text)
+        self.assertIn(' update', text)
+
+    def test_strict_version_parsing(self):
+        for bad in ('1.2.3.4', 'v1.2', '1.2.x', '', None, 1, '1.2.3\n'):
+            self.assertIsNone(v._version_tuple_strict(bad), repr(bad))
+        self.assertEqual(v._version_tuple_strict('2'), (2, 0, 0))
 
 
 class VersionTest(unittest.TestCase):

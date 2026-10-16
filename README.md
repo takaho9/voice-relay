@@ -1,6 +1,6 @@
 # voice-relay
 
-スマホで入力したテキスト（音声入力キーボードで話した文章など）を、**エンドツーエンド暗号化**して PC に届けるツールです。PC 側はクリップボードに自動でコピーしておくこともできるので、スマホで話して PC で `Ctrl+V` するだけになります。
+スマホで入力したテキスト（音声入力キーボードで話した文章など）を、**エンドツーエンド暗号化**して PC に届けるツールです。PC 側は届いたテキストをクリップボードに自動でコピーしておけるので、スマホで話して PC で `Ctrl+V` するだけです。X11 の Linux なら、いまフォーカスしている入力欄（Claude Code などの端末を含む）に直接入れることもできます。
 
 - 管理者権限・アプリのインストール・ポート開放は不要。外向きの HTTPS が通れば使えます（学校や会社の共有 PC でも）
 - 中継サーバー（[ntfy](https://ntfy.sh)）には暗号文しか渡りません。秘密は自分のブラウザの中で作られ、誰とも共有しません
@@ -28,7 +28,7 @@ Linux デスクトップ（Ubuntu など）向けです。Python 3.9 以上が�
 
 これで完了です。次回からは PC にログインするだけで受信が始まり、スマホはホーム画面のアイコンから送れます。セットアップのページはもう閉じて構いません。
 
-**`Ctrl+V` も省きたい場合**（X11 のセッションと `xdotool` が必要）: 3 の最後の行を `python3 ~/voice-relay/cli/voice_relay.py service install --type` にすると、届いたテキストを、いまフォーカスが当たっている入力欄に直接貼り付けます。端末（Claude Code など）にも入りますが、改行は空白に置き換え、Enter は押さないので、確定は自分で Enter を押したときだけです（[詳しく](#フォーカス中の入力欄に直接入れる---type)）。登録済みの場合は `service uninstall` してから登録し直してください。
+**`Ctrl+V` も省きたい場合**（X11 のセッションと `xdotool` が必要）: 3 の最後の行を `python3 ~/voice-relay/cli/voice_relay.py service install --type` にすると、届いたテキストを、いまフォーカスが当たっている入力欄に直接貼り付けます。端末（Claude Code など）にも入りますが、改行は空白に置き換え、Enter は押さないので、確定は自分で Enter を押したときだけです（[詳しく](#フォーカス中の入力欄に直接入れる--type)）。登録済みの場合は `service uninstall` してから登録し直してください。
 
 やめるときは `python3 ~/voice-relay/cli/voice_relay.py service uninstall`（常駐の解除）と `… forget`（秘密の削除）。
 
@@ -71,16 +71,25 @@ Python 版と Node.js 版があり、どちらも同じ形式・同じ秘密フ�
 **Python 版のコマンド**
 
 ```sh
-python3 cli/voice_relay.py import             # 受信用 URL を貼り付けて秘密を保存
-python3 cli/voice_relay.py service install    # 常駐を登録（ログイン中ずっと受信し、届いたらクリップボードへ。未 import なら URL を尋ねる）
-python3 cli/voice_relay.py service status     # 常駐の状態を見る
-python3 cli/voice_relay.py service uninstall  # 常駐を解除
-python3 cli/voice_relay.py receive            # 常駐させずに、このターミナルで受信して表示（Ctrl-C で終了）
-python3 cli/voice_relay.py receive --copy     # 表示に加えてクリップボードにもコピー
-python3 cli/voice_relay.py forget             # 保存した秘密を削除
+python3 cli/voice_relay.py import                  # 受信用 URL を貼り付けて秘密を保存
+python3 cli/voice_relay.py service install         # 常駐を登録（ログイン中ずっと受信し、届いたらクリップボードへ。未 import なら URL を尋ねる）
+python3 cli/voice_relay.py service install --type  # 同上 + フォーカス中の入力欄に直接入れる（X11 のみ）
+python3 cli/voice_relay.py service status          # 常駐の状態を見る
+python3 cli/voice_relay.py service uninstall       # 常駐を解除（--type の有無を変えるときも、いったん解除してから登録し直す）
+python3 cli/voice_relay.py receive                 # 常駐させずに、このターミナルで受信して表示（Ctrl-C で終了）
+python3 cli/voice_relay.py forget                  # 保存した秘密を削除
 ```
 
-**Node.js 版のコマンド**（常駐の登録には対応していません）
+`receive` のオプション（常駐は `receive --copy --no-print --notify [--type]` を動かしています）:
+
+```sh
+--copy      # クリップボードにもコピー
+--type      # フォーカス中の入力欄に直接入れる（X11 のみ。--copy も有効になる）
+--no-print  # 本文を表示しない（時刻と文字数だけ）
+--notify    # 受信したらデスクトップ通知を出す（本文は出さない）
+```
+
+**Node.js 版のコマンド**（常駐の登録・`--type`・`--no-print`・`--notify` には対応していません）
 
 ```sh
 node cli/voice-relay.mjs setup            # 秘密を作って保存し、スマホ用の QR コードを表示
@@ -98,7 +107,7 @@ node cli/voice-relay.mjs forget           # 保存した秘密を削除
 - 同じ PC で受信プロセスが 2 つ動かないようにしています。常駐中に `receive` で中身を見たいときは、いったん `service uninstall` してください
 - ホームディレクトリが複数の PC で共有されている環境（学校の PC など）では、どの PC にログインしても常駐します
 
-#### フォーカス中の入力欄に直接入れる（`--type`）
+#### フォーカス中の入力欄に直接入れる（--type）
 
 `service install --type`（または `receive --type`）にすると、届いたテキストを、いまフォーカスが当たっているウィンドウに貼り付けます。クリップボードに入れてから貼り付けのキーを送る方式で、端末（ウィンドウの種別名に terminal・kitty・ptyxis などを含むもの）には `Ctrl+Shift+V`、それ以外には `Ctrl+V` を送ります。日本語入力がオンでも文字化けしません。Claude Code のような端末上のアプリの入力欄にも、そのまま入ります。
 
@@ -109,7 +118,7 @@ node cli/voice-relay.mjs forget           # 保存した秘密を削除
   - **Enter を押す前に、入っている内容を確認してください。** 秘密が漏れると、第三者がコマンドや Claude への指示を入力欄に置けます（実行はされませんが、確認せずに Enter を押すと実行されます）
   - VS Code の中の端末のように、端末だと判定できないウィンドウには `Ctrl+V` を送ります。アプリによっては貼り付けにならないことがあります
   - 起動直後に届く直近 10 分の再送分は入力しません
-- 何をしたか（「入力しました」「端末なので入力しませんでした」など）は、デスクトップ通知とログに出ます（本文は出しません）
+- 何をしたか（「入力しました」「端末に入力しました（Enter は押していません）」「画面ロック中なので入力しませんでした」など）は、デスクトップ通知とログに出ます（本文は出しません）
 
 #### その他（ターミナル版共通）
 
@@ -156,13 +165,13 @@ sequenceDiagram
     P->>P: テキストを AES-256-GCM で暗号化
     P->>N: 暗号文を POST
     N-->>R: 暗号文を配送
-    R->>R: 復号・検証して表示 / クリップボードへ（貼り付けは手動）
+    R->>R: 復号・検証して表示 / クリップボードへ / 入力欄へ（Enter は押さない）
 ```
 
 1. **セットアップ**で 256bit の秘密をランダムに生成し、送信ページの URL を QR コードで表示します。秘密は URL の `#` 以降（フラグメント）にだけ入っているので、ページを開いてもサーバーには送られません
 2. 秘密から HKDF で **暗号鍵** と **ntfy のトピック名** を別々に派生します。トピック名は中継に使う「宛先」で、ここから暗号鍵は求められません
 3. **送信ページ**はテキストを暗号化し、そのトピックに POST します
-4. **受信側**はトピックを購読し、復号・検証できたものだけを受け付けます
+4. **受信側**はトピックを購読し、復号・検証できたものだけを受け付けます。受け取ったテキストを、コマンドとして実行することはありません
 
 ```
 セットアップ:  秘密 (256bit, ランダム)
@@ -224,7 +233,7 @@ sequenceDiagram
 2. フォークしたリポジトリの **Settings → Pages** で、**Source: Deploy from a branch**、**Branch: `main` / `(root)`** を選んで保存する
 3. 数分後に `https://<ユーザー名>.github.io/voice-relay/` で開けるようになる
 4. 必要なら次の 2 か所を自分の URL に書き換える
-   - `index.html` 末尾の「ソースコードと説明（README）」のリンク
+   - `index.html` の、手順 2A のコマンド欄の `git clone` の URL と、末尾の README へのリンク
    - `cli/voice-relay.mjs` の `DEFAULT_PAGES_URL`（CLI の `setup` が QR コードに入れる URL）。書き換えずに、環境変数 `VOICE_RELAY_PAGES_URL` や `--pages` オプションで指定しても構いません
 
 GitHub Pages 以外でも、HTTPS で静的ファイルを配信できる場所ならどこでも動きます（WebCrypto とクリップボード API は HTTPS が必要）。手元で試すなら `python3 -m http.server --bind 127.0.0.1` で開いた `http://127.0.0.1:8000/` でも動きます。
@@ -240,7 +249,7 @@ ntfy.sh の利用制限を避けたい場合や、中継サーバーも自分で
 - `message-size-limit` は既定の 4K のままで構いません。リバースプロキシの後ろに置く場合は `behind-proxy: true` を設定してください（設定しないとレート制限で全員が 1 人として数えられます）
 - 受信ページを開き直したときに直近 10 分のメッセージを受け取るため、`cache-duration` を 0 にしないでください
 
-使うときは、セットアップページの「設定」で ntfy サーバーの URL（例 `https://ntfy.example.com`）を入力して「適用」を押します。サーバー URL は秘密と一緒に送信ページ・受信用 URL に含まれるので、スマホや受信側で設定し直す必要はありません。CLI では `node cli/voice-relay.mjs setup --server https://ntfy.example.com` のように指定します。
+使うときは、セットアップページの「詳細設定」で ntfy サーバーの URL（例 `https://ntfy.example.com`）を入力して「適用」を押します。サーバー URL は秘密と一緒に送信ページ・受信用 URL に含まれるので、スマホや受信側で設定し直す必要はありません。Python 版の CLI は、受信用 URL を `import` すればサーバーも引き継ぎます。Node.js 版で秘密を作る場合は `node cli/voice-relay.mjs setup --server https://ntfy.example.com` のように指定します。
 
 ## セキュリティ上の設計
 
@@ -251,6 +260,8 @@ ntfy.sh の利用制限を避けたい場合や、中継サーバーも自分で
 - セットアップページから受信ページへは履歴を置き換えて移動し、離れるときに秘密を含む表示を消すので、「戻る」で秘密が再表示されることはありません
 - GitHub Pages ではレスポンスヘッダーを設定できず、CSP の `frame-ancestors` も meta では効かないため、他のサイトの iframe に埋め込まれた場合は JavaScript で表示を消して停止します（クリックジャッキング対策）
 - 各ページに CSP を設定しています: 外部スクリプト・インラインスクリプト禁止（`script-src 'self'`）、外部 CDN・フォント・アナリティクスなし。接続先は、HTML では `https:` までしか絞れません（サーバー URL を変更可能にしているため）。そこでページの起動時に `connect-src <ntfy サーバー>` の CSP を追加し、**それ以外のオリジンには接続できない**ようにしています（CSP は追加するほど厳しくなり、緩めることはできません）。セットアップページは `connect-src 'none'` で、どこにも接続しません
+- ターミナル版は、受け取ったテキストをシェルやコマンドとして解釈しません。外部コマンド（`xclip`・`xdotool` など）にテキストを渡すときは、引数ではなく標準入力を使います。`--type` で送るキーは貼り付け（`Ctrl+V` / `Ctrl+Shift+V`）だけです
+- 常駐時は本文をログ（journald）や通知に出しません。秘密ファイルは権限 600 で、シンボリックリンクや他人が書き込めるディレクトリを拒否します
 - 同梱しているライブラリは QR コード生成の [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)（MIT）だけです。出典とハッシュは `vendor/qrcode-generator/README.md` にあります
 
 ## 開発
@@ -268,10 +279,14 @@ python3 -m unittest discover -s test -v    # Python 版のテスト（cryptograp
 | `js/pairing.js` | 秘密とサーバー URL の、URL フラグメントへの読み書き |
 | `js/ntfy.js` | ntfy への送信と購読（再接続・エラー表示を含む） |
 | `js/text.js` | 受信テキストの無害化（制御文字・見えない文字を見える表記にする） |
+| `js/page.js` / `qr.js` | ページ共通の処理（CSP での接続先の制限など）/ QR コードの生成 |
 | `js/setup.js` / `send.js` / `receive.js` | 各ページ |
 | `cli/voice-relay.mjs` | ターミナル版（Node.js） |
-| `cli/voice_relay.py` | ターミナル版（Python。暗号処理は `cryptography` パッケージ） |
-| `test/` | Node の組み込みテストランナーによるテスト |
+| `cli/voice_relay.py` | ターミナル版（Python。暗号処理は `cryptography` パッケージ。常駐・`--type` を含む） |
+| `cli/clipboard_gtk.py` | `xclip` などがないときにクリップボードを保持する補助プロセス（PyGObject） |
+| `test/*.test.mjs` | JS のテスト（Node の組み込みテストランナー） |
+| `test/test_voice_relay.py` | Python 版のテスト（unittest） |
+| `test/vectors.json` | JS 版と Python 版の相互運用テスト用の固定値 |
 
 ## ライセンス
 

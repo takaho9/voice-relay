@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>voice-relay セットアップ</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+<script type="module" src="js/setup.js"></script>
+</head>
+<body>
+<main>
+  <h1>voice-relay セットアップ</h1>
+  <p>スマホで入力したテキストを、暗号化してこの PC（または別の PC）に届けます。
+    秘密はこのブラウザの中だけで生成され、どこにも送信・保存されません。</p>
+
+  <noscript><p class="warn">JavaScript を有効にしてください。</p></noscript>
+
+  <section class="card">
+    <h2>1. スマホで送信ページを開く</h2>
+    <p>スマホのカメラでこの QR コードを読み取り、開いたページをブックマークかホーム画面に追加してください。</p>
+    <div id="qr" aria-label="送信ページの QR コード"></div>
+    <p class="muted">確認コード: <span id="pair-code" class="mono"></span>（送信・受信ページにも同じコードが表示されます）</p>
+    <details>
+      <summary>送信ページの URL を表示</summary>
+      <p class="url-box" id="send-url"></p>
+      <div class="row"><button type="button" id="copy-send">コピー</button></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2. 受信する</h2>
+    <p><b>ブラウザで受信する場合:</b></p>
+    <div class="row"><button type="button" class="primary" id="start-receive">このタブで受信を開始</button></div>
+    <p class="muted">秘密はこのタブの sessionStorage にだけ引き継がれ、タブを閉じると消えます。</p>
+
+    <p><b>ターミナルで受信する場合（Node.js 20 以上）:</b></p>
+    <p>リポジトリを clone して <code>node cli/voice-relay.mjs import</code> を実行し、
+      下の「受信用 URL」を貼り付けてください。以後は <code>node cli/voice-relay.mjs receive</code> で受信できます。</p>
+
+    <details>
+      <summary>受信用 URL を表示（別の PC で受信する場合など）</summary>
+      <p class="warn">この URL を知っている人は、あなた宛てのメッセージを読むことも、偽のメッセージを送ることもできます。
+        共有 PC のファイルやチャットに残さないでください。</p>
+      <p class="url-box" id="receive-url"></p>
+      <div class="row"><button type="button" id="copy-receive">コピー</button></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>設定</h2>
+    <label for="server">ntfy サーバー（自前でホストしている場合に変更）</label>
+    <div class="row">
+      <input type="url" id="server" spellcheck="false" autocomplete="off">
+      <button type="button" id="apply-server">適用</button>
+    </div>
+    <p class="status" id="server-status" aria-live="polite"></p>
+    <div class="row"><button type="button" id="regenerate">新しい秘密を作り直す</button></div>
+    <p class="muted">作り直すと、以前の送信ページ（ブックマーク）は使えなくなります。</p>
+  </section>
+
+  <p class="muted"><a href="https://github.com/takaho9/voice-relay" rel="noreferrer">ソースコードと説明（README）</a></p>
+</main>
+</body>
+</html>

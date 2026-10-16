@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>voice-relay 受信</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+<script type="module" src="js/receive.js"></script>
+</head>
+<body>
+<main>
+  <h1>voice-relay 受信</h1>
+  <noscript><p class="warn">JavaScript を有効にしてください。</p></noscript>
+
+  <section class="card" id="login" hidden>
+    <label for="pairing-input">受信用 URL（または秘密）を貼り付けてください</label>
+    <form class="row" id="login-form">
+      <input type="password" id="pairing-input" autocomplete="off" spellcheck="false">
+      <button type="submit" class="primary">受信を開始</button>
+    </form>
+    <p class="status" id="login-status" aria-live="polite"></p>
+    <p class="muted">アドレスバーに貼るとブラウザの履歴に残ることがあるので、この欄に貼ってください。
+      初めて使う場合は <a href="index.html">セットアップ</a> から。</p>
+  </section>
+
+  <section id="inbox" hidden>
+    <div class="card">
+      <div class="row">
+        <span class="status" id="conn-status" role="status" aria-live="polite"></span>
+      </div>
+      <p class="muted">確認コード: <span id="pair-code" class="mono"></span> · サーバー: <span id="server-host" class="mono"></span></p>
+      <div class="row">
+        <button type="button" id="clear">一覧を消去</button>
+        <button type="button" id="quit">終了して秘密を消去</button>
+      </div>
+      <p class="warn">共有 PC では、使い終わったら「終了して秘密を消去」を押し、タブを閉じてください。
+        受信したテキストはこのページのメモリ上にしかありません。</p>
+    </div>
+    <p class="muted" id="empty">まだメッセージはありません。スマホの送信ページから送ってください。</p>
+    <ul class="messages" id="messages"></ul>
+  </section>
+</main>
+</body>
+</html>

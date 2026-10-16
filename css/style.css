@@ -1,0 +1,170 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1b1f24;
+  --muted: #5d6673;
+  --border: #d5dae1;
+  --accent: #1f6feb;
+  --accent-text: #ffffff;
+  --ok: #1a7f37;
+  --error: #c62828;
+  --warn-bg: #fff6d6;
+  --warn-text: #5c4500;
+  --code-bg: #eef1f5;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1216;
+    --surface: #181c22;
+    --text: #e6e9ee;
+    --muted: #9aa4b1;
+    --border: #2d343e;
+    --accent: #4c8dff;
+    --accent-text: #0b0d10;
+    --ok: #4cc26b;
+    --error: #ff6b6b;
+    --warn-bg: #3a3112;
+    --warn-text: #f3dc8f;
+    --code-bg: #232932;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 { font-size: 1.4rem; margin: 0.5rem 0 1rem; }
+h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+
+p { margin: 0.5rem 0; }
+
+a { color: var(--accent); }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.muted { color: var(--muted); font-size: 0.9rem; }
+
+.warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
+
+code, .mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+
+.url-box {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 8px;
+  word-break: break-all;
+  user-select: all;
+}
+
+button {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 14px;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+button:disabled { opacity: 0.5; cursor: default; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+input[type="text"], input[type="url"], input[type="password"], textarea {
+  font: inherit;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+textarea { resize: vertical; }
+
+details > summary { cursor: pointer; color: var(--muted); }
+
+.status { min-height: 1.6em; font-size: 0.95rem; }
+.status.ok { color: var(--ok); }
+.status.error { color: var(--error); }
+
+[hidden] { display: none !important; }
+
+/* セットアップ */
+.qr {
+  display: block;
+  width: min(300px, 100%);
+  height: auto;
+  margin: 8px auto;
+  background: #ffffff;
+  border-radius: 8px;
+}
+
+/* 送信ページ（モバイル優先） */
+body.send main { display: flex; flex-direction: column; min-height: 100dvh; padding-bottom: 12px; }
+body.send textarea { flex: 1; min-height: 40vh; font-size: 1.05rem; }
+body.send .send-bar { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+body.send .send-bar button.primary { flex: 1; min-height: 52px; font-size: 1.1rem; }
+body.send header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+body.send h1 { font-size: 1.1rem; margin: 0 0 8px; }
+
+/* 受信ページ */
+.messages { list-style: none; padding: 0; margin: 0; }
+.message {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0;
+}
+.message .meta { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.message .text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0 0;
+}
+.message.copied { border-color: var(--ok); }

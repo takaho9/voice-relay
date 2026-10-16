@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#1f6feb">
+<title>voice-relay 送信</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/style.css">
+<script type="module" src="js/send.js"></script>
+</head>
+<body class="send">
+<main>
+  <header>
+    <h1>voice-relay 送信</h1>
+    <span class="muted mono" id="pair-info"></span>
+  </header>
+  <noscript><p class="warn">JavaScript を有効にしてください。</p></noscript>
+  <p class="warn" id="setup-error" hidden></p>
+  <label for="text" class="muted">送るテキスト（パスワードなどの機密は送らないでください）</label>
+  <textarea id="text" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></textarea>
+  <div class="send-bar">
+    <span class="muted" id="counter"></span>
+    <button type="button" class="primary" id="send" disabled>送信</button>
+  </div>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+</main>
+</body>
+</html>

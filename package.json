@@ -1,0 +1,14 @@
+{
+  "name": "voice-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "スマホで入力したテキストを E2E 暗号化して ntfy 経由で PC に届ける",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

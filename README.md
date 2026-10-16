@@ -59,9 +59,33 @@ sequenceDiagram
 
 受信ページは秘密をブラウザに保存しません（ページのメモリ上にだけ持ちます）。リロードしたときや、別の日・別の PC で受信するときは、受信ページを開き、セットアップ時に控えた **受信用 URL** を入力欄に貼り付けます。アドレスバーに貼ると閲覧履歴に残ることがあるので、入力欄を使ってください。
 
-### 2b. ターミナルで受信する（Node.js 20 以上）
+### 2b. ターミナルで受信する
 
-ブラウザを開いておきたくない場合や、ターミナルで作業している場合に使います。依存パッケージはありません。
+ブラウザを開いておきたくない場合や、ターミナルで作業している場合に使います。Node.js 版と Python 版があり、どちらも同じ秘密ファイルを使います。
+
+| | 必要なもの | 秘密の作成 |
+|---|---|---|
+| **Node.js 版** `cli/voice-relay.mjs` | Node.js 20 以上（追加パッケージなし） | `setup`（ターミナルに QR コードを表示）または `import` |
+| **Python 版** `cli/voice_relay.py` | Python 3.8 以上 + `cryptography` パッケージ | Web のセットアップページで作って `import` |
+
+#### Python 版（Node.js が古い・入っていない環境向け）
+
+管理者権限は不要です。`cryptography`（AES-GCM と HKDF に使う定番の暗号ライブラリ）をユーザー領域に入れます。
+
+```sh
+python3 -m pip install --user cryptography
+git clone https://github.com/takaho9/voice-relay.git
+cd voice-relay
+
+# Web のセットアップページの「受信用 URL」を貼り付けて保存（入力内容は画面に表示されません）
+python3 cli/voice_relay.py import
+# 受信を開始（Ctrl-C で終了）。--copy でクリップボードにもコピー
+python3 cli/voice_relay.py receive
+# 保存した秘密を消す
+python3 cli/voice_relay.py forget
+```
+
+#### Node.js 版
 
 ```sh
 git clone https://github.com/takaho9/voice-relay.git
@@ -81,6 +105,8 @@ node cli/voice-relay.mjs receive --copy
 node cli/voice-relay.mjs forget
 ```
 
+以下は両方に共通です。
+
 - 秘密はコマンドライン引数では受け取りません（共有マシンでは `ps` で他のユーザーに見えるため）。保存ファイルが他人から読める権限になっていたら、起動を拒否します
 - 保存したくない場合は、ファイルを作らずに `receive` を実行してください。起動時に受信用 URL を入力するプロンプトが出ます（入力内容は画面に表示されません）
 - 受信したテキストに含まれる端末の制御文字（エスケープシーケンス）や見えない文字は、`⟦U+001B⟧` のような表記に置き換えて表示します
@@ -88,7 +114,7 @@ node cli/voice-relay.mjs forget
 - 起動直後は、直近 10 分以内に送られたメッセージも表示します（`--copy` でコピーするのは起動後に送られたものだけです）
 
 <details>
-<summary>管理者権限なしで Node.js を入れる（Linux x64）</summary>
+<summary>管理者権限なしで Node.js を入れる（Linux x64。Python 版を使うなら不要）</summary>
 
 ```sh
 mkdir -p ~/.local/opt && cd ~/.local/opt
@@ -175,7 +201,7 @@ ntfy.sh の利用制限を避けたい場合や、中継サーバーも自分で
 
 ## セキュリティ上の設計
 
-- 暗号処理はすべてブラウザ / Node 組み込みの WebCrypto（`crypto.subtle`）で行い、自前の暗号実装はしていません（`js/crypto.js`）
+- 暗号処理はすべてブラウザ / Node 組み込みの WebCrypto（`crypto.subtle`）、Python 版は `cryptography` パッケージで行い、自前の暗号実装はしていません（`js/crypto.js`、`cli/voice_relay.py`）
 - 秘密は URL のフラグメントにだけ置きます。フラグメントは HTTP リクエストにも Referer にも含まれません。各ページは `<meta name="referrer" content="no-referrer">` も設定しています
 - 受信ページは秘密をブラウザに保存しません。フラグメントで受け取ったらすぐにアドレスバーと履歴の項目から消します。セットアップページからの受け渡しには `sessionStorage` を使いますが、受信ページが読んだ時点で消します（`sessionStorage` は「閉じたタブを開き直す」で復元されるため、置いたままにしません）。`localStorage` は使いません
 - セットアップページから受信ページへは履歴を置き換えて移動し、離れるときに秘密を含む表示を消すので、「戻る」で秘密が再表示されることはありません
@@ -186,8 +212,11 @@ ntfy.sh の利用制限を避けたい場合や、中継サーバーも自分で
 ## 開発
 
 ```sh
-npm test   # = node --test（依存パッケージなし）
+npm test                                   # JS のテスト（= node --test、依存パッケージなし）
+python3 -m unittest discover -s test -v    # Python 版のテスト（cryptography が必要）
 ```
+
+`test/vectors.json` は JS 版と Python 版の相互運用テスト用の固定値です。片方で暗号化したものをもう片方で復号できることを、両方のテストで確かめています。
 
 | ファイル | 内容 |
 |---|---|
@@ -196,7 +225,8 @@ npm test   # = node --test（依存パッケージなし）
 | `js/ntfy.js` | ntfy への送信と購読（再接続・エラー表示を含む） |
 | `js/text.js` | 受信テキストの無害化（制御文字・見えない文字を見える表記にする） |
 | `js/setup.js` / `send.js` / `receive.js` | 各ページ |
-| `cli/voice-relay.mjs` | ターミナル版 |
+| `cli/voice-relay.mjs` | ターミナル版（Node.js） |
+| `cli/voice_relay.py` | ターミナル版（Python。暗号処理は `cryptography` パッケージ） |
 | `test/` | Node の組み込みテストランナーによるテスト |
 
 ## ライセンス

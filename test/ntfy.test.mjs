@@ -89,3 +89,16 @@ test('429 はレート制限のエラーとして伝え、60 秒以上待つ', a
     assert.ok((info?.retryInMs ?? 0) >= 60_000);
   });
 });
+
+test('リダイレクトは辿らない', async () => {
+  const { publish, NtfyError } = await import('../js/ntfy.js');
+  let followed = false;
+  await withServer((req, res) => {
+    if (req.url === '/elsewhere') followed = true;
+    res.writeHead(307, { Location: '/elsewhere' });
+    res.end();
+  }, async (server) => {
+    await assert.rejects(publish(server, 'topic', 'AAAA'), NtfyError);
+    assert.equal(followed, false);
+  });
+});

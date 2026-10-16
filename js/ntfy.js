@@ -71,6 +71,7 @@ export async function publish(server, topic, body, opts = {}) {
       headers: { 'Content-Type': 'text/plain', Firebase: 'no' },
       cache: 'no-store',
       referrerPolicy: 'no-referrer',
+      redirect: 'error', // 中継サーバーに別のホストや http:// へ誘導されないように
       signal: opts.signal,
     });
   } catch (e) {
@@ -121,6 +122,7 @@ export async function subscribe(server, topic, opts) {
       const res = await fetch(`${topicUrl(server, topic)}/json?since=${encodeURIComponent(since)}`, {
         cache: 'no-store',
         referrerPolicy: 'no-referrer',
+        redirect: 'error',
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) throw errorForStatus(res.status);

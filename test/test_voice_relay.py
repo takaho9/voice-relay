@@ -167,6 +167,40 @@ class TypingTest(unittest.TestCase):
         for cls in ['"gedit", "Gedit"', '"google-chrome", "Google-chrome"', '"code", "Code"', '"slack", "Slack"']:
             self.assertFalse(any(h in cls.lower() for h in v.TERMINAL_CLASS_HINTS), cls)
 
+    def _paste_with(self, wm_class):
+        sent = []
+        saved = (v.typing_unavailable_reason, v._screen_locked, v._focused_window_class, v._run)
+        try:
+            v.typing_unavailable_reason = lambda: None
+            v._screen_locked = lambda: False
+            v._focused_window_class = lambda: wm_class
+            v._run = lambda cmd, timeout=3: sent.append(cmd) or ''
+            return v.paste_into_focused(True), sent
+        finally:
+            v.typing_unavailable_reason, v._screen_locked, v._focused_window_class, v._run = saved
+
+    def test_paste_key_by_window(self):
+        result, sent = self._paste_with('"gedit", "gedit"')
+        self.assertEqual(result, '入力しました')
+        self.assertEqual(sent, [['xdotool', 'key', '--clearmodifiers', 'ctrl+v']])
+        result, sent = self._paste_with('"gnome-terminal-server", "gnome-terminal-server"')
+        self.assertIn('端末に入力しました', result)
+        self.assertEqual(sent, [['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v']])
+        for cls in ['"xterm", "XTerm"', '"urxvt", "URxvt"']:
+            result, sent = self._paste_with(cls)
+            self.assertIn('コピーだけ', result)
+            self.assertEqual(sent, [])
+        result, sent = self._paste_with(None)
+        self.assertIn('判定できなかった', result)
+        self.assertEqual(sent, [])
+
+    def test_flatten_blocks_bracketed_paste_escape(self):
+        # 貼り付けの終わりを装う ESC[201~ や C1 の CSI（0x9b）は取り除かれる
+        out = v.flatten_for_typing('safe\x1b[201~rm -rf ~\n\x9b201~')
+        self.assertNotIn('\x1b', out)
+        self.assertNotIn('\x9b', out)
+        self.assertNotIn('\n', out)
+
     def test_unavailable_on_wayland(self):
         old = dict(os.environ)
         try:

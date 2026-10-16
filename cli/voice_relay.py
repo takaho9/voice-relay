@@ -584,16 +584,20 @@ class Clipboard(object):
 #
 # 受信したテキストを、いまフォーカスが当たっているウィンドウに貼り付ける。
 # 秘密を知った人が PC にキー入力を送れることになるので、次のように制限する:
-# - 改行は空白に置き換え、Enter は押さない（入力したものが勝手に実行されないように）
-# - 端末にフォーカスがあるとき・画面ロック中・フォーカス先を判定できないときは入力しない
-# 入力はクリップボード経由（Ctrl+V）で行う。日本語入力（IME）がオンでも化けない。
+# - 改行と制御文字（ESC を含む）を取り除き、Enter は押さない。端末に貼り付けても入力欄に入るだけで、
+#   実行されるのは自分で Enter を押したときだけ。ESC を除くので、貼り付けの終わりを装うエスケープ
+#   シーケンス（ESC[201~）で端末の貼り付け保護をすり抜けることもできない
+# - 画面ロック中・フォーカス先を判定できないときは入力しない
+# 入力はクリップボード経由で行う（端末は Ctrl+Shift+V、それ以外は Ctrl+V）。日本語入力（IME）がオンでも化けない。
 
-# WM_CLASS にこれらの文字列が含まれるウィンドウは端末とみなして入力しない
+# WM_CLASS にこれらの文字列が含まれるウィンドウは端末とみなし、Ctrl+Shift+V で貼り付ける
 TERMINAL_CLASS_HINTS = (
     'terminal', 'xterm', 'rxvt', 'kitty', 'alacritty', 'konsole', 'terminator', 'tilix', 'wezterm',
     'st-256color', 'foot', 'guake', 'yakuake', 'terminology', 'sakura', 'ghostty', 'tabby', 'hyper',
     'warp', 'contour', 'blackbox', 'ptyxis', 'kgx', 'console', 'tmux', 'screen', 'putty', 'remmina',
 )
+# Ctrl+Shift+V で CLIPBOARD を貼り付けられない端末（Shift+Insert で PRIMARY を貼る）。コピーだけにする
+UNSUPPORTED_TERMINAL_CLASSES = ('"xterm"', 'rxvt')
 
 _LINE_BREAKS_RE = re.compile('\r\n|[\n\r\u0085  ]')
 _CONTROL_RE = re.compile('[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')
@@ -660,11 +664,12 @@ def paste_into_focused(clipboard_ready):
     cls = _focused_window_class()
     if cls is None:
         return 'フォーカス先を判定できなかったので入力しませんでした'
-    if any(h in cls for h in TERMINAL_CLASS_HINTS):
-        return '端末にフォーカスがあるので入力しませんでした（Ctrl+Shift+V で貼り付けできます）'
-    if _run(['xdotool', 'key', '--clearmodifiers', 'ctrl+v']) is None:
+    if any(u in cls for u in UNSUPPORTED_TERMINAL_CLASSES):
+        return 'この端末には入力できないのでコピーだけしました（Shift+Insert ではなく、メニューから貼り付けてください）'
+    terminal = any(h in cls for h in TERMINAL_CLASS_HINTS)
+    if _run(['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v' if terminal else 'ctrl+v']) is None:
         return '入力に失敗しました'
-    return '入力しました'
+    return '端末に入力しました（Enter は押していません）' if terminal else '入力しました'
 
 
 def notify(summary, body):
@@ -1029,7 +1034,7 @@ def main():
     p.add_argument('--no-print', action='store_true', help='受信したテキストを表示しない（時刻と文字数だけ）')
     p.add_argument('--notify', action='store_true', help='受信したらデスクトップ通知を出す（本文は出さない）')
     p.add_argument('--type', action='store_true',
-                   help='フォーカス中の入力欄に貼り付ける（X11 + xdotool。改行は空白にし Enter は押さない。端末には入力しない）')
+                   help='フォーカス中の入力欄に貼り付ける（X11 + xdotool。改行は空白にし Enter は押さない。端末は Ctrl+Shift+V）')
     p = sub.add_parser('service', help='ログイン中ずっと受信してクリップボードにコピーする常駐プロセスを登録・解除する')
     p.add_argument('action', choices=['install', 'uninstall', 'status'])
     p.add_argument('--type', action='store_true',

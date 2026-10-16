@@ -36,14 +36,14 @@
     <h2><span class="num">2</span>この PC での受け取り方を選ぶ</h2>
 
     <div class="choice">
-      <h3>A. ターミナルで常駐させる（おすすめ・Linux）</h3>
-      <p>届いたら自動でクリップボードにコピーされ、通知が出ます。<code>Ctrl+V</code> で貼り付けるだけです。次回からはログインするだけで動きます。</p>
+      <h3>A. 42 の PC：カーソルのある入力欄に自動で入力する（おすすめ）</h3>
+      <p>届いた文章が、いまカーソルのある入力欄（エディタ、ブラウザ、Claude Code など）にそのまま入ります。Enter は押さないので、送信・実行は自分で Enter を押したときだけです。改行は空白になります。次回からは 42 の PC にログインするだけで動きます。</p>
       <ol class="substeps">
         <li>
           <p>ターミナルで次のコマンドを実行します。</p>
           <pre class="cmd" id="cmd-a">python3 -m pip install --user --upgrade "cryptography&gt;=50.0.2"
 git clone https://github.com/takaho9/voice-relay.git ~/voice-relay
-python3 ~/voice-relay/cli/voice_relay.py service install</pre>
+python3 ~/voice-relay/cli/voice_relay.py service install --type</pre>
           <div class="row"><button type="button" id="copy-cmd">コマンドをコピー</button></div>
         </li>
         <li>
@@ -51,7 +51,7 @@ python3 ~/voice-relay/cli/voice_relay.py service install</pre>
           <div class="row"><button type="button" class="primary" id="copy-receive">受信用 URL をコピー</button></div>
         </li>
       </ol>
-      <p class="muted">X11 の環境で <code>Ctrl+V</code> も省きたい場合は、最後の行を <code>… service install --type</code> にすると、フォーカス中の入力欄に直接貼り付けます（端末なら Ctrl+Shift+V で入れます。改行は空白にし、Enter は押さないので、実行は自分で Enter を押したときだけです）。</p>
+      <p class="muted">自動入力せずクリップボードへのコピーだけにしたい場合（Wayland の環境など）は、最後の行の <code>--type</code> を外してください。届いたら通知が出るので、<code>Ctrl+V</code> で貼り付けます。</p>
       <details>
         <summary>受信用 URL を表示</summary>
         <p class="warn">この URL を知っている人は、あなた宛てのメッセージを読むことも、偽のメッセージを送ることもできます。

@@ -153,6 +153,32 @@ class PairingTest(unittest.TestCase):
             self.assertNotIn('secret-looking', str(e))
 
 
+class TypingTest(unittest.TestCase):
+    def test_flatten_removes_line_breaks_and_controls(self):
+        self.assertEqual(v.flatten_for_typing('a\nb\r\nc\rd\u2028e\u0085f'), 'a b c d e f')
+        self.assertEqual(v.flatten_for_typing('rm -rf ~\n'), 'rm -rf ~')
+        self.assertEqual(v.flatten_for_typing('x\x1b[31my\x07\tz'), 'x[31my\tz')
+        self.assertNotIn('\n', v.flatten_for_typing('\n\n\n'))
+
+    def test_terminal_hints(self):
+        for cls in ['"gnome-terminal-server", "Gnome-terminal"', '"xterm", "XTerm"', '"kitty", "kitty"',
+                    '"org.gnome.Console", "Kgx"', '"Alacritty", "Alacritty"', '"konsole", "konsole"']:
+            self.assertTrue(any(h in cls.lower() for h in v.TERMINAL_CLASS_HINTS), cls)
+        for cls in ['"gedit", "Gedit"', '"google-chrome", "Google-chrome"', '"code", "Code"', '"slack", "Slack"']:
+            self.assertFalse(any(h in cls.lower() for h in v.TERMINAL_CLASS_HINTS), cls)
+
+    def test_unavailable_on_wayland(self):
+        old = dict(os.environ)
+        try:
+            os.environ['XDG_SESSION_TYPE'] = 'wayland'
+            self.assertIn('X11', v.typing_unavailable_reason())
+            self.assertIn('入力しませんでした', v.paste_into_focused(True))
+            self.assertIn('コピーできなかった', v.paste_into_focused(False))
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+
 class VersionTest(unittest.TestCase):
     def test_version_tuple(self):
         self.assertEqual(v._version_tuple('50.0.2'), (50, 0, 2))

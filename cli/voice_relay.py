@@ -579,6 +579,94 @@ class Clipboard(object):
             self._helper = None
 
 
+# ---------------------------------------------------------------------------
+# フォーカス中の入力欄への入力（--type。X11 + xdotool のみ）
+#
+# 受信したテキストを、いまフォーカスが当たっているウィンドウに貼り付ける。
+# 秘密を知った人が PC にキー入力を送れることになるので、次のように制限する:
+# - 改行は空白に置き換え、Enter は押さない（入力したものが勝手に実行されないように）
+# - 端末にフォーカスがあるとき・画面ロック中・フォーカス先を判定できないときは入力しない
+# 入力はクリップボード経由（Ctrl+V）で行う。日本語入力（IME）がオンでも化けない。
+
+# WM_CLASS にこれらの文字列が含まれるウィンドウは端末とみなして入力しない
+TERMINAL_CLASS_HINTS = (
+    'terminal', 'xterm', 'rxvt', 'kitty', 'alacritty', 'konsole', 'terminator', 'tilix', 'wezterm',
+    'st-256color', 'foot', 'guake', 'yakuake', 'terminology', 'sakura', 'ghostty', 'tabby', 'hyper',
+    'warp', 'contour', 'blackbox', 'ptyxis', 'kgx', 'console', 'tmux', 'screen', 'putty', 'remmina',
+)
+
+_LINE_BREAKS_RE = re.compile('\r\n|[\n\r\u0085  ]')
+_CONTROL_RE = re.compile('[\u0000-\u0008\u000b-\u001f\u007f-\u009f]')
+
+
+def flatten_for_typing(text):
+    """入力用に、改行を空白にし、制御文字を取り除く（タブは残す）。"""
+    return _CONTROL_RE.sub('', _LINE_BREAKS_RE.sub(' ', text)).strip()
+
+
+def _run(cmd, timeout=3):
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout,
+                           universal_newlines=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _screen_locked():
+    """GNOME などの画面ロック中か（判定できなければ False）。"""
+    if not shutil.which('gdbus'):
+        return False
+    for dest, path in (('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver'),
+                       ('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver')):
+        out = _run(['gdbus', 'call', '--session', '--dest', dest, '--object-path', path,
+                    '--method', dest + '.GetActive'])
+        if out is not None:
+            return 'true' in out
+    return False
+
+
+def _focused_window_class():
+    """フォーカス中のウィンドウの WM_CLASS（小文字）。取れなければ None。"""
+    wid = _run(['xdotool', 'getactivewindow'])
+    if not wid or not wid.strip().isdigit():
+        return None
+    out = _run(['xprop', '-id', wid.strip(), 'WM_CLASS'])
+    if not out or '=' not in out:
+        return None
+    return out.split('=', 1)[1].strip().lower()
+
+
+def typing_unavailable_reason():
+    """--type が使えない理由（使えるなら None）。"""
+    if os.environ.get('XDG_SESSION_TYPE') == 'wayland' or not os.environ.get('DISPLAY'):
+        return 'X11 のセッションでのみ使えます（Wayland では他のアプリへの入力が OS に禁止されています）'
+    for tool in ('xdotool', 'xprop'):
+        if not shutil.which(tool):
+            return '{} が見つかりません'.format(tool)
+    return None
+
+
+def paste_into_focused(clipboard_ready):
+    """フォーカス中のウィンドウに Ctrl+V を送る。結果を表す短い文字列を返す。
+    clipboard_ready: 直前にクリップボードへのコピーが成功したか。"""
+    if not clipboard_ready:
+        return 'クリップボードにコピーできなかったので入力しませんでした'
+    reason = typing_unavailable_reason()
+    if reason:
+        return '入力しませんでした（{}）'.format(reason)
+    if _screen_locked():
+        return '画面ロック中なので入力しませんでした'
+    cls = _focused_window_class()
+    if cls is None:
+        return 'フォーカス先を判定できなかったので入力しませんでした'
+    if any(h in cls for h in TERMINAL_CLASS_HINTS):
+        return '端末にフォーカスがあるので入力しませんでした（Ctrl+Shift+V で貼り付けできます）'
+    if _run(['xdotool', 'key', '--clearmodifiers', 'ctrl+v']) is None:
+        return '入力に失敗しました'
+    return '入力しました'
+
+
 def notify(summary, body):
     """デスクトップ通知を出す（notify-send がなければ何もしない）。本文は含めないこと。"""
     if not shutil.which('notify-send'):
@@ -664,6 +752,11 @@ def cmd_receive(args):
     inbox = Inbox()
     started_ms = int(time.time() * 1000)
     out = sys.stdout
+    if args.type:
+        args.copy = True  # 入力はクリップボード経由なのでコピーも有効にする
+        reason = typing_unavailable_reason()
+        if reason:
+            info('警告: --type は使えません（{}）。クリップボードへのコピーだけ行います。'.format(reason))
     clipboard = Clipboard() if args.copy else None
     lock = acquire_instance_lock()  # noqa: F841（プロセスが終わるまで保持する）
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -697,14 +790,22 @@ def cmd_receive(args):
             info('（見えない文字・制御文字が {} 個含まれています）'.format(n))
         # 再起動のたびにクリップボードを上書きしないよう、コピーするのは起動後に送られたものだけ
         copied = None
+        typed = None
         if clipboard is not None and m['t'] >= started_ms:
-            copied = clipboard.copy(m['text'])
+            # 入力する場合は、改行を空白にしたものをコピーして貼り付ける（Enter を押したことにならないように）
+            text = flatten_for_typing(m['text']) if args.type else m['text']
+            copied = clipboard.copy(text) if text else False
             info('（クリップボードにコピーしました）' if copied
                  else '（コピーできませんでした。xclip / xsel / wl-copy か、PyGObject（GTK）が必要です）')
+            if args.type:
+                typed = paste_into_focused(copied)
+                info('（{}）'.format(typed))
         if args.notify:
             # 通知に本文は出さない（画面をのぞかれても内容が分からないように）
             detail = '{} 文字'.format(len(m['text']))
-            if copied is True:
+            if typed:
+                detail += '・' + typed
+            elif copied is True:
                 detail += '・クリップボードにコピーしました'
             elif copied is False:
                 detail += '・コピーできませんでした'
@@ -777,9 +878,9 @@ def _autostart_path():
     return os.path.join(_config_home(), 'autostart', 'voice-relay.desktop')
 
 
-def _receiver_command(secret_file):
+def _receiver_command(secret_file, type_text=False):
     return [sys.executable, os.path.abspath(__file__), '--secret-file', os.path.abspath(secret_file),
-            'receive', '--copy', '--no-print', '--notify']
+            'receive', '--copy', '--no-print', '--notify'] + (['--type'] if type_text else [])
 
 
 def _systemd_quote(arg):
@@ -821,7 +922,7 @@ def service_install(args):
         # まだ秘密を取り込んでいなければ、ここで受信用 URL を尋ねる（import と同じ）
         args.force = False
         cmd_import(args)
-    cmd = _receiver_command(args.secret_file)
+    cmd = _receiver_command(args.secret_file, getattr(args, 'type', False))
     if _has_systemd_user():
         _write_private(_unit_path(), '\n'.join([
             '# voice-relay: ログイン中ずっと受信し、届いたテキストをクリップボードにコピーする',
@@ -927,8 +1028,12 @@ def main():
                         '貼り付けは自分で行う）')
     p.add_argument('--no-print', action='store_true', help='受信したテキストを表示しない（時刻と文字数だけ）')
     p.add_argument('--notify', action='store_true', help='受信したらデスクトップ通知を出す（本文は出さない）')
+    p.add_argument('--type', action='store_true',
+                   help='フォーカス中の入力欄に貼り付ける（X11 + xdotool。改行は空白にし Enter は押さない。端末には入力しない）')
     p = sub.add_parser('service', help='ログイン中ずっと受信してクリップボードにコピーする常駐プロセスを登録・解除する')
     p.add_argument('action', choices=['install', 'uninstall', 'status'])
+    p.add_argument('--type', action='store_true',
+                   help='install: 受信したらフォーカス中の入力欄にも貼り付ける（X11 + xdotool のみ）')
     sub.add_parser('send', help='標準入力のテキストを送る（動作確認用）')
     sub.add_parser('forget', help='保存した秘密を削除する')
     args = parser.parse_args()
